@@ -143,17 +143,17 @@ Manages embedding generation:
 **Performance**: ~200ms for batch of 50 texts on CPU, faster on GPU.
 
 #### `parallel_indexer.py`
-Thread-pool based file processing:
+Thread-pool based parallel file parsing:
 
-- **Default**: 8 worker threads
-- **Chunking**: Splits large files into overlapping segments
-- **Symbol-aware**: Aligns chunks with symbol boundaries when possible
+- **Default**: CPU count - 1 worker threads (min 1, max 32)
+- **Thread-safe**: Uses thread-local parsers to avoid contention
+- **Performance**: 3-5x faster indexing for large codebases (1000+ files)
 
 **Key Methods**:
-- `index_files(file_paths, chunk_size, chunk_overlap)`: Parallel processing
-- `_process_file(file_path, chunk_size, chunk_overlap)`: Single file handler
+- `parallel_parse_files(files, max_workers, progress_callback)`: Main entry point
+- `parse_file_worker(filepath, parser_factory)`: Per-file parsing function
 
-**Output**: List of chunks with metadata (file, line range, symbols, embeddings)
+**Output**: Tuple of (all_symbols, error_count) - list of Symbol objects from all files
 
 #### `source_retriever.py`
 Main orchestration class (refactored from rag_chat.py):
@@ -184,15 +184,21 @@ project-root/.codegrok/
 **Metadata Schema**:
 ```json
 {
-  "project_name": "my-app",
-  "project_path": "/path/to/project",
-  "file_hashes": {
-    "src/main.py": "abc123...",
-    "src/utils.py": "def456..."
+  "codebase_path": "/path/to/project",
+  "embedding_model": "nomic-embed-code",
+  "collection_name": "codebase",
+  "indexed_at": "2025-12-12T10:30:00",
+  "stats": {
+    "total_files": 150,
+    "total_symbols": 1200,
+    "total_chunks": 1200,
+    "parse_errors": 0,
+    "indexing_time": 45.2
   },
-  "chunk_size": 100,
-  "chunk_overlap": 20,
-  "indexed_at": "2025-12-12T10:30:00"
+  "file_mtimes": {
+    "src/main.py": 1702389000.0,
+    "src/utils.py": 1702388500.0
+  }
 }
 ```
 
@@ -355,10 +361,12 @@ FastMCP server implementation:
 
 ### Modifying Chunk Strategy
 
-Edit `parallel_indexer.py`:
-- Adjust default `chunk_size` and `chunk_overlap`
-- Modify `_process_file()` to change chunking logic
-- Consider symbol boundaries vs line-based chunking
+The current strategy is **symbol-based** (AST) chunking - each function/class/method becomes one chunk.
+
+Edit `treesitter_parser.py`:
+- Adjust `MAX_CODE_SNIPPET_CHARS` (default: 4000 chars ≈ 1000-1300 tokens)
+- Modify `_create_chunk_text()` in `source_retriever.py` to change chunk format
+- Symbol extraction logic is in `_extract_symbols()`
 
 ### Changing Embedding Model
 
@@ -424,7 +432,7 @@ Edit `embedding_service.py`:
 **Search**: ~500MB-1GB RAM (model + index in memory)
 
 **Tips**:
-- Reduce chunk_size for large codebases
+- Reduce `MAX_CODE_SNIPPET_CHARS` in `treesitter_parser.py` for memory-constrained systems
 - Use GPU for faster embedding generation
 - Close other applications during indexing
 
@@ -436,14 +444,14 @@ Edit `embedding_service.py`:
 
 ### Issue: Indexing crashes with OOM
 **Cause**: Too many large files being processed
-**Solution**: Reduce chunk_size or number of parallel workers
+**Solution**: Reduce `max_workers` in parallel indexer or reduce `MAX_CODE_SNIPPET_CHARS`
 
 ### Issue: Search returns irrelevant results
 **Cause**: Query too vague or index quality issues
 **Solution**:
-- Use more specific queries
-- Try re-indexing with smaller chunk_size
-- Verify correct files were indexed
+- Use more specific queries (mention function names, parameters, or behavior)
+- Verify correct files were indexed with `get_stats` tool
+- Check that the embedding model loaded correctly
 
 ### Issue: MCP client can't find server
 **Cause**: Installation path issues
@@ -557,11 +565,12 @@ print(embedding.shape)
 - Main Logic: `/home/rdondeti/Code/Desktop/CodeGrok_mcp/src/codegrok_mcp/indexing/source_retriever.py`
 
 ### Key Constants
-- Default Chunk Size: 100 lines
-- Default Chunk Overlap: 20 lines
+- Chunking Strategy: Symbol-based (AST) - each function/class/method becomes one chunk
+- Max Code Snippet: 4000 characters (~1000-1300 tokens, research-optimal)
 - Default top_k: 5 results
-- Embedding Model: `sentence-transformers/all-MiniLM-L6-v2`
-- Embedding Dimensions: 384
+- Embedding Model: `nomic-ai/nomic-embed-code-v1` (SOTA for code retrieval)
+- Embedding Dimensions: 768
+- Max Sequence Length: 8192 tokens
 - Storage Directory: `.codegrok/`
 
 ## Conclusion

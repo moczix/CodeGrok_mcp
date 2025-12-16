@@ -66,7 +66,9 @@ class TreeSitterParser(IParser):
     """
 
     # Constants
-    MAX_CODE_SNIPPET_CHARS = 1500  # Increased from 500 for better embedding context
+    # 4000 chars ≈ 1000-1300 tokens, matching the research-optimal 1024 token sweet spot
+    # for nomic-embed-code (trained on 2048 tokens, supports 8192 via NTK interpolation)
+    MAX_CODE_SNIPPET_CHARS = 4000
     MAX_FILE_SIZE_MB = 10
 
     def __init__(self):
