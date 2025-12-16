@@ -26,7 +26,7 @@ Usage:
 import gc
 import threading
 from functools import lru_cache
-from typing import List, Optional, Union
+from typing import Dict, List, Optional, Union
 
 # Lazy imports for optional dependencies
 _sentence_transformers = None
@@ -424,8 +424,8 @@ class EmbeddingService:
                     _torch.cuda.empty_cache()
 
 
-# Singleton instance
-_embedding_service: Optional[EmbeddingService] = None
+# Model-keyed cache of embedding services (fixes bug where model_name was ignored after first call)
+_embedding_services: Dict[str, EmbeddingService] = {}
 _singleton_lock = threading.Lock()
 
 
@@ -434,36 +434,46 @@ def get_embedding_service(
     **kwargs
 ) -> EmbeddingService:
     """
-    Get singleton embedding service instance.
+    Get embedding service instance for the specified model.
 
-    This ensures all embeddings use the same model instance,
-    preventing embedding space inconsistencies.
+    This uses a model-keyed cache to ensure each model has its own instance,
+    allowing multiple models to be used simultaneously while preventing
+    embedding space inconsistencies within the same model.
 
     Args:
         model_name: Embedding model name
         **kwargs: Additional arguments for EmbeddingService
 
     Returns:
-        Singleton EmbeddingService instance
+        EmbeddingService instance for the specified model
     """
-    global _embedding_service
+    global _embedding_services
 
-    if _embedding_service is None:
+    if model_name not in _embedding_services:
         with _singleton_lock:
-            if _embedding_service is None:
-                _embedding_service = EmbeddingService(model_name, **kwargs)
+            if model_name not in _embedding_services:
+                _embedding_services[model_name] = EmbeddingService(model_name, **kwargs)
 
-    return _embedding_service
+    return _embedding_services[model_name]
 
 
-def reset_embedding_service():
-    """Reset the singleton instance (useful for testing)."""
-    global _embedding_service
+def reset_embedding_service(model_name: str = None):
+    """Reset embedding service instance(s).
+
+    Args:
+        model_name: Specific model to reset, or None to reset all.
+    """
+    global _embedding_services
 
     with _singleton_lock:
-        if _embedding_service is not None:
-            _embedding_service.unload()
-            _embedding_service = None
+        if model_name is None:
+            # Reset all services
+            for service in _embedding_services.values():
+                service.unload()
+            _embedding_services.clear()
+        elif model_name in _embedding_services:
+            _embedding_services[model_name].unload()
+            del _embedding_services[model_name]
 
 
 class ChromaDBEmbeddingFunction:

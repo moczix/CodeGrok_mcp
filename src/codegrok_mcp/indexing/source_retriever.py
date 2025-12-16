@@ -44,13 +44,44 @@ except ImportError:
 from codegrok_mcp.indexing.embedding_service import get_embedding_service, EmbeddingService
 
 from codegrok_mcp.parsers.treesitter_parser import TreeSitterParser
-from codegrok_mcp.parsers.language_configs import get_supported_extensions
+from codegrok_mcp.parsers.language_configs import get_supported_extensions, get_language_for_file
 from codegrok_mcp.core.models import Symbol, SymbolType
 
 
 # Derived from authoritative EXTENSION_MAP in language_configs.py (30+ extensions, 9 languages)
 # This eliminates duplication and ensures extensions stay in sync
 SUPPORTED_EXTENSIONS = list(get_supported_extensions())
+SUPPORTED_EXTENSIONS_SET = set(SUPPORTED_EXTENSIONS)  # For O(1) lookup
+
+# Common directories to skip during file discovery
+SKIP_DIRS = {'.git', 'node_modules', '__pycache__', '.codegrok', 'venv', '.venv',
+             '.tox', '.mypy_cache', '.pytest_cache', 'dist', 'build', '.eggs'}
+
+
+def discover_files(codebase_path: Path, extensions: set = None) -> List[Path]:
+    """Single-pass file discovery with extension filtering.
+
+    This is 30x+ faster than calling rglob() once per extension because it
+    traverses the directory tree only once instead of 30+ times.
+
+    Args:
+        codebase_path: Path to the codebase root directory.
+        extensions: Set of extensions to include (default: SUPPORTED_EXTENSIONS_SET)
+
+    Returns:
+        List of file paths matching the extensions.
+    """
+    if extensions is None:
+        extensions = SUPPORTED_EXTENSIONS_SET
+
+    files = []
+    for path in codebase_path.rglob("*"):
+        # Skip directories in SKIP_DIRS
+        if any(skip_dir in path.parts for skip_dir in SKIP_DIRS):
+            continue
+        if path.is_file() and path.suffix in extensions:
+            files.append(path)
+    return files
 
 
 def count_codebase_files(codebase_path: Path) -> int:
@@ -62,10 +93,7 @@ def count_codebase_files(codebase_path: Path) -> int:
     Returns:
         Total count of files with supported extensions.
     """
-    count = 0
-    for ext in SUPPORTED_EXTENSIONS:
-        count += len(list(codebase_path.rglob(f"*{ext}")))
-    return count
+    return len(discover_files(codebase_path))
 
 
 @dataclass
@@ -95,14 +123,18 @@ class SourceRetriever:
     def __init__(
         self,
         codebase_path: str,
-        embedding_model: str = "nomic-embed-text",
+        embedding_model: str = "nomic-embed-code",  # SOTA for code retrieval
         collection_name: str = "codebase",
         verbose: bool = True,
         persist_path: Optional[str] = None,
 
         # Parallel indexing options (3-5x faster for large codebases)
-        parallel: bool = False,
-        max_workers: Optional[int] = None
+        parallel: bool = True,  # Enabled by default for better performance
+        max_workers: Optional[int] = None,
+
+        # Dependency injection for testability
+        parser: Optional['TreeSitterParser'] = None,
+        embedding_service: Optional['EmbeddingService'] = None
     ):
         """
         Initialize the source retriever.
@@ -113,9 +145,10 @@ class SourceRetriever:
             collection_name: ChromaDB collection name
             verbose: Print progress messages
             persist_path: Path for ChromaDB persistent storage (None = in-memory)
-            use_native_embedding: Use native SentenceTransformers (True) or Ollama API (False)
             parallel: Enable parallel file parsing for faster indexing (3-5x speedup)
             max_workers: Number of parallel workers (default: CPU count - 1)
+            parser: Optional parser instance for dependency injection (for testing)
+            embedding_service: Optional embedding service for dependency injection (for testing)
         """
         self.codebase_path = Path(codebase_path)
         self.embedding_model = embedding_model
@@ -126,12 +159,12 @@ class SourceRetriever:
         self.parallel = parallel
         self.max_workers = max_workers
 
-        # Initialize parser
-        self.parser = TreeSitterParser()
+        # Initialize parser (use injected or create default)
+        self.parser = parser or TreeSitterParser()
 
-        # Initialize embedding service
+        # Initialize embedding service (use injected or create default)
         self._log(f"Using native embedding: {embedding_model}")
-        self.embedding_service = get_embedding_service(
+        self.embedding_service = embedding_service or get_embedding_service(
             embedding_model,
             show_progress=verbose  # Only show tqdm progress bar if verbose
         )
@@ -232,6 +265,9 @@ class SourceRetriever:
         chunk_id = f"{symbol.filepath}:{symbol.name}:{symbol.line_start}"
         chunk_text = self._create_chunk_text(symbol)
 
+        # Get language from filepath for filtering support
+        language = get_language_for_file(symbol.filepath) or "unknown"
+
         return CodeChunk(
             id=chunk_id,
             text=chunk_text,
@@ -245,7 +281,8 @@ class SourceRetriever:
                 'type': symbol.type.value,
                 'line': symbol.line_start,
                 'signature': symbol.signature,
-                'parent': symbol.parent or ""
+                'parent': symbol.parent or "",
+                'language': language  # NEW: enables language filtering in search
             }
         )
 
@@ -295,13 +332,12 @@ class SourceRetriever:
 
         start_time = time.time()
 
-        # Step 1: Find all files
+        # Step 1: Find all files (single-pass discovery - 30x faster)
         if not progress_callback:
             self._log("\nStep 1: Finding files...")
 
-        all_files = []
-        for ext in file_extensions:
-            all_files.extend(self.codebase_path.rglob(f"*{ext}"))
+        extensions_set = set(file_extensions)
+        all_files = discover_files(self.codebase_path, extensions_set)
 
         self.stats['total_files'] = len(all_files)
 
@@ -330,7 +366,7 @@ class SourceRetriever:
         all_symbols = []
 
         # Use parallel parsing if enabled and there are enough files
-        use_parallel = self.parallel and len(all_files) > 10
+        use_parallel = self.parallel and len(all_files) > 50  # Threshold increased for small projects
         if use_parallel:
             # Parallel parsing (3-5x faster for large codebases)
             from codegrok_mcp.indexing.parallel_indexer import parallel_parse_files
@@ -391,8 +427,8 @@ class SourceRetriever:
 
         try:
             self.chroma_client.delete_collection(self.collection_name)
-        except:
-            pass
+        except Exception:
+            pass  # Collection doesn't exist yet - this is expected
 
         self.collection = self.chroma_client.create_collection(
             name=self.collection_name,
@@ -448,9 +484,6 @@ class SourceRetriever:
                 # Generate embeddings for batch
                 texts = [chunk.text for chunk in batch]
 
-                # Generate embeddings for batch
-                texts = [chunk.text for chunk in batch]
-
                 # Native batch embedding (10-20x faster)
                 embeddings = self.embedding_service.embed_batch(texts)
 
@@ -486,7 +519,9 @@ class SourceRetriever:
     def get_sources_for_question(
         self,
         question: str,
-        n_results: int = 5
+        n_results: int = 5,
+        language: Optional[str] = None,
+        symbol_type: Optional[str] = None
     ) -> tuple[List[Dict[str, Any]], List[str]]:
         """
         Get source references and documents for a question.
@@ -496,6 +531,8 @@ class SourceRetriever:
         Args:
             question: The question to search for
             n_results: Number of results to retrieve
+            language: Optional language filter (e.g., 'python', 'javascript')
+            symbol_type: Optional symbol type filter (e.g., 'function', 'class')
 
         Returns:
             Tuple of (documents, sources) where:
@@ -508,10 +545,20 @@ class SourceRetriever:
         # Embed the question
         query_embedding = self.embedding_service.embed(question, is_query=True)
 
+        # Build optional metadata filter
+        where_filter = None
+        if language or symbol_type:
+            where_filter = {}
+            if language:
+                where_filter["language"] = language
+            if symbol_type:
+                where_filter["type"] = symbol_type
+
         # Search ChromaDB
         results = self.collection.query(
             query_embeddings=[query_embedding],
-            n_results=n_results
+            n_results=n_results,
+            where=where_filter
         )
 
         documents = results['documents'][0]
@@ -607,7 +654,8 @@ class SourceRetriever:
 
     def incremental_reindex(
         self,
-        file_extensions: Optional[List[str]] = None
+        file_extensions: Optional[List[str]] = None,
+        progress_callback: Optional[callable] = None
     ) -> Dict[str, Any]:
         """
         Re-index only files that changed since last indexing.
@@ -621,6 +669,12 @@ class SourceRetriever:
 
         Args:
             file_extensions: List of extensions to consider (default: all supported)
+            progress_callback: Optional callback function for progress updates.
+                Called with (event_type, data) where event_type is one of:
+                - "changes_detected": data = {"new": int, "modified": int, "deleted": int}
+                - "parsing_start": data = {"total": int}
+                - "embedding_start": data = {"total": int}
+                - "complete": data = {"chunks_added": int}
 
         Returns:
             Dict with keys:
@@ -633,24 +687,26 @@ class SourceRetriever:
         """
         start_time = time.time()
 
+        def emit(event_type: str, data: dict):
+            """Emit progress event to callback if provided."""
+            if progress_callback:
+                progress_callback(event_type, data)
+
         extensions = file_extensions or SUPPORTED_EXTENSIONS
 
         # 1. Get stored file_mtimes from metadata
         stored_mtimes = self._metadata.get('file_mtimes', {})
 
-        # 2. Scan current files and collect modification times
-        # Skip common non-source directories
-        skip_dirs = ['.git', 'node_modules', '__pycache__', '.codegrok', 'venv', '.venv']
-        current_files: Dict[str, float] = {}
+        # 2. Scan current files and collect modification times (single-pass - 30x faster)
+        extensions_set = set(extensions)
+        all_current_paths = discover_files(Path(self.codebase_path), extensions_set)
 
-        for ext in extensions:
-            for filepath in Path(self.codebase_path).rglob(f'*{ext}'):
-                # Skip files in excluded directories
-                if not any(skip_dir in str(filepath) for skip_dir in skip_dirs):
-                    try:
-                        current_files[str(filepath)] = filepath.stat().st_mtime
-                    except OSError:
-                        pass  # Skip files that can't be stat'd
+        current_files: Dict[str, float] = {}
+        for filepath in all_current_paths:
+            try:
+                current_files[str(filepath)] = filepath.stat().st_mtime
+            except OSError:
+                pass  # Skip files that can't be stat'd
 
         # 3. Categorize changes by comparing current vs stored
         stored_paths = set(stored_mtimes.keys())
@@ -665,6 +721,13 @@ class SourceRetriever:
 
         files_to_reindex = new_files | modified_files
         files_to_remove = deleted_files | modified_files
+
+        # Emit changes detected event
+        emit("changes_detected", {
+            "new": len(new_files),
+            "modified": len(modified_files),
+            "deleted": len(deleted_files)
+        })
 
         self._log(f"Incremental reindex: {len(new_files)} new, {len(modified_files)} modified, {len(deleted_files)} deleted")
 
@@ -684,6 +747,9 @@ class SourceRetriever:
 
         # 5. Parse and index new/modified files
         if files_to_reindex:
+            # Emit parsing start event
+            emit("parsing_start", {"total": len(files_to_reindex)})
+
             chunks = []
             for filepath in files_to_reindex:
                 try:
@@ -697,6 +763,9 @@ class SourceRetriever:
                     continue
 
             if chunks:
+                # Emit embedding start event
+                emit("embedding_start", {"total": len(chunks)})
+
                 # Generate embeddings for new chunks
                 texts = [chunk.text for chunk in chunks]
 
@@ -729,6 +798,9 @@ class SourceRetriever:
             "chunks_removed": chunks_removed,
             "time_seconds": elapsed_time
         }
+
+        # Emit complete event
+        emit("complete", {"chunks_added": chunks_added})
 
         self._log(f"Incremental reindex complete in {elapsed_time}s: "
                   f"+{chunks_added} chunks, -{chunks_removed} files processed")

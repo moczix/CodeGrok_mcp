@@ -66,7 +66,7 @@ class TreeSitterParser(IParser):
     """
 
     # Constants
-    MAX_CODE_SNIPPET_CHARS = 500
+    MAX_CODE_SNIPPET_CHARS = 1500  # Increased from 500 for better embedding context
     MAX_FILE_SIZE_MB = 10
 
     def __init__(self):
