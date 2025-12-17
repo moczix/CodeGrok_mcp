@@ -41,7 +41,7 @@ CodeGrok: Returns auth middleware, login handlers, JWT validation code...
 - **9 Languages Supported** - Python, JavaScript, TypeScript, C, C++, Go, Java, Kotlin, Bash
 - **28 File Extensions** - Comprehensive coverage including `.jsx`, `.tsx`, `.mjs`, `.hpp`, etc.
 - **Fast Parallel Indexing** - 3-5x faster with multi-threaded parsing
-- **Incremental Updates** - Only re-index changed files with `relearn`
+- **Incremental Updates** - Only re-index changed files (auto mode)
 - **Local & Private** - All data stays on your machine in `.codegrok/` folder
 - **Zero LLM Dependencies** - Lightweight, focused tool (no API keys required)
 - **GPU Acceleration** - Auto-detects CUDA for faster embeddings
@@ -58,9 +58,9 @@ CodeGrok: Returns auth middleware, login handlers, JWT validation code...
 | **Semantic Code Search** | Natural language queries → vector similarity search against indexed code |
 | **Find Code by Purpose** | Query "How does auth work?" → Returns relevant auth files with line numbers |
 | **Symbol Extraction** | Extracts functions, classes, methods with signatures, docstrings, calls, imports |
-| **Incremental Updates** | `relearn` only re-indexes modified files (uses file modification time) |
+| **Incremental Updates** | `learn` with auto mode only re-indexes modified files (uses file modification time) |
 | **Persistent Storage** | Index survives restarts in `.codegrok/` folder |
-| **Load Existing Index** | `load` tool instantly loads previously indexed codebase |
+| **Load Existing Index** | `learn` with `mode='load_only'` instantly loads previously indexed codebase |
 
 ### For Learning a New Codebase
 
@@ -83,7 +83,7 @@ CodeGrok: Returns auth middleware, login handlers, JWT validation code...
 |------------|-------------|
 | **Code Execution** | Pure indexing/search - no interpreter, no running tests |
 | **Code Modification** | Read-only search - doesn't write or edit files |
-| **Real-time File Watching** | No daemon mode - manually call `relearn` to update index |
+| **Real-time File Watching** | No daemon mode - manually call `learn` again to update index |
 | **Cross-repository Search** | Single codebase per index - can't search multiple projects simultaneously |
 | **Find All Usages** | Finds definitions, not references (no "who calls this function?") |
 | **Type Inference / LSP** | No language server - no jump-to-definition, no autocomplete |
@@ -108,7 +108,7 @@ CodeGrok: Returns auth middleware, login handlers, JWT validation code...
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/CodeGrok_mcp.git
+git clone https://github.com/rdondeti/CodeGrok_mcp.git
 cd CodeGrok_mcp
 
 # Option 1: Use setup script (recommended)
@@ -368,16 +368,19 @@ Model Context Protocol (MCP)
 
 ## MCP Tools Reference
 
-CodeGrok provides **6 tools** for AI assistants:
+CodeGrok provides **4 tools** for AI assistants:
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
-| `learn` | Index a codebase (full) | `path` (required), `file_extensions`, `embedding_model` |
-| `relearn` | Re-index only changed files | `path` (optional - uses loaded codebase) |
-| `load` | Load existing index | `path` (required) |
-| `get_sources` | Semantic code search | `question` (required), `n_results` (1-50, default: 10) |
+| `learn` | Index a codebase (smart modes) | `path` (required), `mode` (auto/full/load_only), `file_extensions`, `embedding_model` |
+| `get_sources` | Semantic code search | `question` (required), `n_results` (1-50, default: 10), `language`, `symbol_type` |
 | `get_stats` | Get index statistics | None |
 | `list_supported_languages` | List supported languages | None |
+
+**Learn modes:**
+- `auto` (default): Smart detection - incremental reindex if exists, full index if new
+- `full`: Force complete re-index (destroys existing index)
+- `load_only`: Just load existing index without any indexing
 
 ### Tool Examples
 
@@ -387,7 +390,7 @@ CodeGrok provides **6 tools** for AI assistants:
   "tool": "learn",
   "arguments": {
     "path": "/home/user/my-project",
-    "embedding_model": "nomic-embed-code"
+    "mode": "auto"
   }
 }
 ```
@@ -433,23 +436,25 @@ CodeGrok provides **6 tools** for AI assistants:
 }
 ```
 
-#### Incremental Update
+#### Incremental Update (using learn with auto mode)
 ```json
 {
-  "tool": "relearn",
-  "arguments": {}
+  "tool": "learn",
+  "arguments": {
+    "path": "/home/user/my-project",
+    "mode": "auto"
+  }
 }
 ```
 
-**Response:**
+**Response (when index exists):**
 ```json
 {
   "success": true,
+  "mode_used": "incremental",
   "files_added": 2,
   "files_modified": 5,
-  "files_deleted": 1,
-  "chunks_added": 45,
-  "chunks_removed": 12
+  "files_deleted": 1
 }
 ```
 
@@ -515,7 +520,7 @@ Query → Embedding → Vector Similarity → Ranked Results
 
 1. **Embed Query**: Convert natural language to vector
 2. **Search**: Find similar vectors in ChromaDB
-3. **Return**: Top-k results with file paths, line numbers, and code snippets
+3. **Return**: Ranked results (`n_results`) with file paths, line numbers, and code snippets
 
 ### Storage
 
@@ -543,11 +548,12 @@ your-project/
 
 | Model | Size | Best For |
 |-------|------|----------|
-| `nomic-embed-code` | 768d / 137M | **Code (default, recommended)** |
-| `nomic-embed-text` | 768d / 137M | General text |
-| `coderankembed` | 768d / 137M | Code (alternative) |
-| `bge-m3` | 1024d / 568M | Multilingual |
-| `all-MiniLM-L6-v2` | 384d / 22M | Fast, lightweight |
+| `coderankembed` | 768d / 137M | **Code (default, recommended)** - uses `nomic-ai/CodeRankEmbed` |
+
+The default model (`nomic-ai/CodeRankEmbed`) is optimized for code retrieval with:
+- 768-dimensional embeddings
+- 8192 max sequence length
+- State-of-the-art performance on CodeSearchNet benchmarks
 
 ---
 
@@ -557,7 +563,7 @@ your-project/
 
 ```bash
 # Clone
-git clone https://github.com/yourusername/CodeGrok_mcp.git
+git clone https://github.com/rdondeti/CodeGrok_mcp.git
 cd CodeGrok_mcp
 
 # Run setup script
@@ -619,7 +625,7 @@ pip install -e .
 <summary><strong>Indexing is slow</strong></summary>
 
 - Large codebases (>10k files) take longer on first index
-- Use `relearn` after first index for incremental updates
+- Use `learn` again after first index for incremental updates (auto mode)
 - Close other heavy applications
 - Consider indexing a subdirectory first
 </details>
@@ -636,16 +642,16 @@ pip install -e .
 <summary><strong>Out of memory</strong></summary>
 
 - Index smaller portions of the codebase
-- Use `all-MiniLM-L6-v2` model (smaller footprint)
+- The default `coderankembed` model uses ~500MB-2GB RAM
 - Close other applications
 </details>
 
 <details>
 <summary><strong>"No index loaded" error</strong></summary>
 
-Use `load` tool first:
+Use `learn` tool first:
 ```
-"Load the codebase at /path/to/project"
+"Learn my codebase at /path/to/project"
 ```
 </details>
 
@@ -702,8 +708,8 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## Support
 
-- **Issues**: [GitHub Issues](https://github.com/yourusername/CodeGrok_mcp/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/CodeGrok_mcp/discussions)
+- **Issues**: [GitHub Issues](https://github.com/rdondeti/CodeGrok_mcp/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/rdondeti/CodeGrok_mcp/discussions)
 
 ---
 

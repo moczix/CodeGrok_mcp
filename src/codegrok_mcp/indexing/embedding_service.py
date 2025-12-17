@@ -62,64 +62,29 @@ def _import_dependencies():
 
 # Supported embedding models with their configurations
 EMBEDDING_MODELS = {
-    # SOTA code embedding model - best for code analysis
-    'nomic-embed-code': {
-        'hf_name': 'nomic-ai/nomic-embed-code-v1',
-        'dimensions': 768,
-        'max_seq_length': 8192,
-        'trust_remote_code': True,
-        'prompt_prefix': 'search_document: ',
-        'query_prefix': 'search_query: ',
-    },
-    # General text embedding (previous default)
-    'nomic-embed-text': {
-        'hf_name': 'nomic-ai/nomic-embed-text-v1.5',
-        'dimensions': 768,
-        'max_seq_length': 8192,
-        'trust_remote_code': True,  # Required for nomic
-        'prompt_prefix': 'search_document: ',  # Nomic uses task prefixes
-        'query_prefix': 'search_query: ',
-    },
-    # Lightweight code embedding - efficient alternative
+    # Default: Lightweight code embedding - efficient (137M params, ~521MB)
+    # SOTA on CodeSearchNet for its size class
     'coderankembed': {
-        'hf_name': 'nomic-ai/CodeRankEmbed-137M',
+        'hf_name': 'nomic-ai/CodeRankEmbed',
         'dimensions': 768,
         'max_seq_length': 8192,
         'trust_remote_code': True,
         'prompt_prefix': '',
-        'query_prefix': '',
+        'query_prefix': 'Represent this query for searching relevant code: ',
     },
-    'bge-m3': {
-        'hf_name': 'BAAI/bge-m3',
-        'dimensions': 1024,
-        'max_seq_length': 8192,
-        'trust_remote_code': False,
-        'prompt_prefix': '',
-        'query_prefix': '',
-    },
-    'all-MiniLM-L6-v2': {
-        'hf_name': 'sentence-transformers/all-MiniLM-L6-v2',
-        'dimensions': 384,
-        'max_seq_length': 256,
-        'trust_remote_code': False,
-        'prompt_prefix': '',
-        'query_prefix': '',
-    },
-    'all-mpnet-base-v2': {
-        'hf_name': 'sentence-transformers/all-mpnet-base-v2',
-        'dimensions': 768,
-        'max_seq_length': 384,
-        'trust_remote_code': False,
-        'prompt_prefix': '',
-        'query_prefix': '',
+    # Example template - copy this to add your own model
+    'my-new-model': {
+        'hf_name': 'organization/model-name',  # HuggingFace model ID
+        'dimensions': 768,                      # Output vector dimensions
+        'max_seq_length': 512,                  # Max input tokens
+        'trust_remote_code': False,             # True if model needs custom code
+        'prompt_prefix': '',                    # Prepended to documents
+        'query_prefix': '',                     # Prepended to queries
     },
 }
 
-# Default model - Nomic Embed Code (SOTA for code retrieval)
-DEFAULT_MODEL = 'nomic-embed-code'
-
-# Previous default - General text embedding (uncomment to swap back)
-# DEFAULT_MODEL = 'nomic-embed-text'
+# Default model - CodeRankEmbed (137M params, SOTA for size, code-optimized)
+DEFAULT_MODEL = 'coderankembed'
 
 
 class EmbeddingService:

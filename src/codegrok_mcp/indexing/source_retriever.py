@@ -519,7 +519,7 @@ class SourceRetriever:
     def get_sources_for_question(
         self,
         question: str,
-        n_results: int = 5,
+        n_results: int = 10,
         language: Optional[str] = None,
         symbol_type: Optional[str] = None
     ) -> tuple[List[Dict[str, Any]], List[str]]:

@@ -153,7 +153,7 @@ class TestStdioProtocol:
 
         # Step 2: Discover tools
         tools = mcp_client.list_tools()
-        assert len(tools) >= 5
+        assert len(tools) >= 4
 
         # Step 3: Learn codebase
         learn_response = mcp_client.call_tool("learn", {

@@ -68,7 +68,7 @@ CodeGrok_mcp/
     └── mcp/                   # MCP server layer
         ├── __init__.py
         ├── state.py           # Global state management
-        └── server.py          # FastMCP server with 6 tools
+        └── server.py          # FastMCP server with 4 tools
 ```
 
 ## Key Files and Their Purposes
@@ -131,14 +131,15 @@ AST node type mappings for each language:
 #### `embedding_service.py`
 Manages embedding generation:
 
-- **Model**: `sentence-transformers/all-MiniLM-L6-v2`
-- **Dimensions**: 384
+- **Model**: `nomic-ai/CodeRankEmbed` (code-optimized, SOTA for code retrieval)
+- **Dimensions**: 768
+- **Max Sequence Length**: 8192 tokens
 - **Device**: Auto-detects CUDA/MPS/CPU
-- **Caching**: Batch processing for efficiency
+- **Caching**: LRU cache (1000 entries) + batch processing for efficiency
 
 **Key Methods**:
-- `embed_texts(texts)`: Generate embeddings for text list
-- `embed_single(text)`: Generate single embedding
+- `embed(text)`: Generate single embedding with LRU caching
+- `embed_batch(texts)`: Generate embeddings for text list (batch processing)
 
 **Performance**: ~200ms for batch of 50 texts on CPU, faster on GPU.
 
@@ -168,7 +169,7 @@ Main orchestration class (refactored from rag_chat.py):
 
 **Key Methods**:
 - `index_codebase()`: Full indexing pipeline
-- `get_sources_for_question(query, top_k)`: Semantic search
+ - `get_sources_for_question(query, n_results)`: Semantic search
 - `incremental_reindex()`: Re-index only changed files
 - `load_existing_index()`: Load from `.codegrok/` directory
 - `get_stats()`: Return indexing statistics
@@ -223,25 +224,23 @@ FastMCP server implementation:
 
 **Entry Point**: `main()` function (called by `codegrok-mcp` command)
 
-**MCP Tools** (6 total):
+**MCP Tools** (4 total):
 
-1. **`learn`**: Index a codebase
-   - Creates SourceRetriever, calls `index_codebase()`, stores in state
+1. **`learn`**: Index a codebase (smart modes)
+   - `mode='auto'` (default): Incremental reindex if exists, full index if new
+   - `mode='full'`: Force complete re-index
+   - `mode='load_only'`: Just load existing index without indexing
+   - Creates SourceRetriever, stores in state
 
-2. **`relearn`**: Incremental re-indexing
-   - Requires existing index, calls `incremental_reindex()`
-
-3. **`load`**: Load existing index
-   - Creates SourceRetriever from `.codegrok/` directory
-
-4. **`get_sources`**: Semantic search
-   - Calls `get_sources_for_question(query, top_k)`
+2. **`get_sources`**: Semantic search
+   - Calls `get_sources_for_question(query, n_results)`
    - Returns list of code chunks with file paths
+   - Supports optional `language` and `symbol_type` filters
 
-5. **`get_stats`**: Index statistics
+3. **`get_stats`**: Index statistics
    - Returns files count, symbols count, chunks count
 
-6. **`list_supported_languages`**: List supported languages
+4. **`list_supported_languages`**: List supported languages
    - Returns static mapping of languages to extensions
 
 **Transport**: stdio (reads from stdin, writes to stdout)
@@ -315,11 +314,11 @@ FastMCP server implementation:
    ↓
 2. MCP server retrieves SourceRetriever from state
    ↓
-3. SourceRetriever.get_sources_for_question(query, top_k)
+3. SourceRetriever.get_sources_for_question(query, n_results)
    ↓
 4. EmbeddingService.embed_single(query)
    ↓
-5. ChromaDB.query(embedding, n_results=top_k)
+5. ChromaDB.query(embedding, n_results=n_results)
    ↓
 6. Format results (file paths, code snippets, scores)
    ↓
@@ -329,7 +328,7 @@ FastMCP server implementation:
 ### Incremental Reindex Flow
 
 ```
-1. User calls `relearn` tool
+1. User calls `learn` tool with mode='auto' (existing index detected)
    ↓
 2. Load metadata.json (file hashes)
    ↓
@@ -423,7 +422,7 @@ Edit `embedding_service.py`:
 **Typical**: 100-500ms for semantic search
 **Factors**:
 - Index size (number of chunks)
-- top_k parameter
+- n_results parameter
 - ChromaDB query optimization
 
 ### Memory Usage
@@ -558,17 +557,16 @@ print(embedding.shape)
 - **Run Tests**: `pytest`
 - **Type Check**: `mypy src/`
 
-### File Paths (Absolute)
-- Project Root: `/home/rdondeti/Code/Desktop/CodeGrok_mcp`
-- Source Code: `/home/rdondeti/Code/Desktop/CodeGrok_mcp/src/codegrok_mcp`
-- MCP Server: `/home/rdondeti/Code/Desktop/CodeGrok_mcp/src/codegrok_mcp/mcp/server.py`
-- Main Logic: `/home/rdondeti/Code/Desktop/CodeGrok_mcp/src/codegrok_mcp/indexing/source_retriever.py`
+### File Paths (Relative to Project Root)
+- Source Code: `src/codegrok_mcp/`
+- MCP Server: `src/codegrok_mcp/mcp/server.py`
+- Main Logic: `src/codegrok_mcp/indexing/source_retriever.py`
 
 ### Key Constants
 - Chunking Strategy: Symbol-based (AST) - each function/class/method becomes one chunk
 - Max Code Snippet: 4000 characters (~1000-1300 tokens, research-optimal)
-- Default top_k: 5 results
-- Embedding Model: `nomic-ai/nomic-embed-code-v1` (SOTA for code retrieval)
+- Default n_results: 10 (for get_sources queries)
+- Embedding Model: `nomic-ai/CodeRankEmbed` (SOTA for code retrieval)
 - Embedding Dimensions: 768
 - Max Sequence Length: 8192 tokens
 - Storage Directory: `.codegrok/`
