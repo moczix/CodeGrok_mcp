@@ -555,6 +555,27 @@ The default model (`nomic-ai/CodeRankEmbed`) is optimized for code retrieval wit
 - 8192 max sequence length
 - State-of-the-art performance on CodeSearchNet benchmarks
 
+### Security Note: `trust_remote_code`
+
+The default embedding model (`nomic-ai/CodeRankEmbed`) requires `trust_remote_code=True` when loading via SentenceTransformers. This flag allows execution of custom Python code bundled with the model.
+
+**Why it's required:**
+- The model uses a custom Nomic BERT architecture that isn't part of the standard HuggingFace model library
+- Custom files: `modeling_hf_nomic_bert.py` (model architecture), `configuration_hf_nomic_bert.py` (config)
+
+**Security audit:**
+The custom code has been reviewed and contains:
+- Standard PyTorch neural network definitions
+- No `exec()`, `eval()`, or dynamic code execution
+- No subprocess or shell commands
+- No network requests beyond HuggingFace's standard model download APIs
+- Only imports from trusted libraries (torch, transformers, einops, safetensors)
+
+**For maximum security:**
+- Review the model code yourself: [nomic-ai/CodeRankEmbed on HuggingFace](https://huggingface.co/nomic-ai/CodeRankEmbed/tree/main)
+- Pin to a specific model revision in production deployments
+- Consider using Microsoft CodeBERT (`microsoft/codebert-base`) as an alternative that doesn't require `trust_remote_code` (with potential quality trade-offs)
+
 ---
 
 ## Development
