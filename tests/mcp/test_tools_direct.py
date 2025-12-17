@@ -5,13 +5,12 @@ This simulates what an MCP client does, without the protocol overhead.
 Note: FastMCP's @mcp.tool decorator wraps functions into FunctionTool objects.
 We access the underlying function via the .fn attribute.
 """
+import asyncio
 import pytest
 from pathlib import Path
 from fastmcp.exceptions import ToolError
 from codegrok_mcp.mcp.server import (
     learn as learn_tool,
-    relearn as relearn_tool,
-    load as load_tool,
     get_sources as get_sources_tool,
     get_stats as get_stats_tool,
     list_supported_languages as list_supported_languages_tool
@@ -19,12 +18,15 @@ from codegrok_mcp.mcp.server import (
 from codegrok_mcp.mcp.state import get_state, reset_state
 
 # Access underlying functions from FastMCP FunctionTool wrappers
-learn = learn_tool.fn
-relearn = relearn_tool.fn
-load = load_tool.fn
+learn_fn = learn_tool.fn  # async function
 get_sources = get_sources_tool.fn
 get_stats = get_stats_tool.fn
 list_supported_languages = list_supported_languages_tool.fn
+
+
+def learn(**kwargs):
+    """Helper to run async learn function synchronously."""
+    return asyncio.get_event_loop().run_until_complete(learn_fn(**kwargs))
 
 
 class TestListSupportedLanguages:
@@ -81,7 +83,6 @@ class TestLearnTool:
         learn(path=str(temp_project))
 
         state = get_state()
-        assert state.is_loaded is True
         assert state.is_loaded is True
         assert state.retriever is not None
 
@@ -148,42 +149,41 @@ class TestGetSourcesTool:
 
 
 
-class TestLoadTool:
-    """Test the load tool - loads existing index."""
+class TestLoadOnlyMode:
+    """Test the learn tool with mode='load_only' - loads existing index."""
 
-    def test_load_after_learn(self, temp_project):
+    def test_load_only_after_learn(self, temp_project):
         # First, create an index
         learn(path=str(temp_project))
 
         # Clear state
         reset_state()
 
-        # Load the index
-        result = load(path=str(temp_project))
+        # Load the index using load_only mode
+        result = learn(path=str(temp_project), mode="load_only")
 
         assert result["success"] is True
+        assert result["mode_used"] == "load_only"
         assert result["stats"]["total_files"] >= 2
 
+    def test_load_only_missing_index(self, tmp_path):
+        # Create empty directory - no .codegrok/ exists
+        with pytest.raises(ToolError, match="No existing index found"):
+            learn(path=str(tmp_path), mode="load_only")
 
 
-    def test_load_missing_codegrok_dir(self, tmp_path):
-        # Create empty directory
-        with pytest.raises(ToolError, match="No .codegrok/ found"):
-            load(path=str(tmp_path))
+class TestIncrementalReindex:
+    """Test the learn tool with mode='auto' for incremental reindexing."""
 
-
-class TestRelearnTool:
-    """Test the relearn tool - incremental reindexing."""
-
-    def test_relearn_without_path(self, temp_project):
-        """Test relearn using already loaded codebase."""
+    def test_incremental_reindex_after_file_change(self, temp_project):
+        """Test incremental reindex detects file changes."""
         # Initial learn
         learn(path=str(temp_project))
 
         # Modify a file
         (temp_project / "main.py").write_text('def new_function(): pass')
 
-        # Relearn without providing path (uses loaded state)
-        result = relearn(path=None)
+        # Learn again with auto mode (should do incremental)
+        result = learn(path=str(temp_project), mode="auto")
 
         assert result["success"] is True

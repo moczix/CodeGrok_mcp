@@ -276,7 +276,7 @@ No length limits on search queries or validation of filter parameters.
 @mcp.tool
 async def get_sources(
     query: str,  # No length limit - could be megabytes
-    n_results: int = 10,  # No upper bound validated
+    top_k: int = 5,  # No upper bound validated
     language: str | None = None,  # Not validated against known languages
     symbol_type: str | None = None  # Not validated against SymbolType enum
 ) -> str:
@@ -285,22 +285,22 @@ async def get_sources(
 **Attack Scenario**:
 ```python
 # Memory exhaustion with huge query
-await get_sources(query="A" * 10_000_000, n_results=1000000)
+await get_sources(query="A" * 10_000_000, top_k=1000000)
 ```
 
 **Remediation**:
 ```python
 MAX_QUERY_LENGTH = 10000
-MAX_N_RESULTS = 100
+MAX_TOP_K = 100
 VALID_LANGUAGES = ["python", "javascript", "typescript", ...]
 VALID_SYMBOL_TYPES = [e.value for e in SymbolType]
 
 @mcp.tool
-async def get_sources(query: str, n_results: int = 10, ...) -> str:
+async def get_sources(query: str, top_k: int = 5, ...) -> str:
     if len(query) > MAX_QUERY_LENGTH:
         return f"Query too long (max {MAX_QUERY_LENGTH} chars)"
-    if n_results > MAX_N_RESULTS:
-        n_results = MAX_N_RESULTS
+    if top_k > MAX_TOP_K:
+        top_k = MAX_TOP_K
     if language and language not in VALID_LANGUAGES:
         return f"Unknown language: {language}"
 ```

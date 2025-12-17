@@ -520,7 +520,7 @@ Query → Embedding → Vector Similarity → Ranked Results
 
 1. **Embed Query**: Convert natural language to vector
 2. **Search**: Find similar vectors in ChromaDB
-3. **Return**: Ranked results (`n_results`) with file paths, line numbers, and code snippets
+3. **Return**: Top-k results with file paths, line numbers, and code snippets
 
 ### Storage
 

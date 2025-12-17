@@ -169,7 +169,7 @@ Main orchestration class (refactored from rag_chat.py):
 
 **Key Methods**:
 - `index_codebase()`: Full indexing pipeline
- - `get_sources_for_question(query, n_results)`: Semantic search
+- `get_sources_for_question(query, top_k)`: Semantic search
 - `incremental_reindex()`: Re-index only changed files
 - `load_existing_index()`: Load from `.codegrok/` directory
 - `get_stats()`: Return indexing statistics
@@ -314,11 +314,11 @@ FastMCP server implementation:
    ↓
 2. MCP server retrieves SourceRetriever from state
    ↓
-3. SourceRetriever.get_sources_for_question(query, n_results)
+3. SourceRetriever.get_sources_for_question(query, top_k)
    ↓
 4. EmbeddingService.embed_single(query)
    ↓
-5. ChromaDB.query(embedding, n_results=n_results)
+5. ChromaDB.query(embedding, n_results=top_k)
    ↓
 6. Format results (file paths, code snippets, scores)
    ↓
@@ -422,7 +422,7 @@ Edit `embedding_service.py`:
 **Typical**: 100-500ms for semantic search
 **Factors**:
 - Index size (number of chunks)
-- n_results parameter
+- top_k parameter
 - ChromaDB query optimization
 
 ### Memory Usage

@@ -123,7 +123,7 @@ class SourceRetriever:
     def __init__(
         self,
         codebase_path: str,
-        embedding_model: str = "nomic-embed-code",  # SOTA for code retrieval
+        embedding_model: str = "coderankembed",  # SOTA for code retrieval
         collection_name: str = "codebase",
         verbose: bool = True,
         persist_path: Optional[str] = None,

@@ -1,4 +1,5 @@
 """Test state management for isolation between tests and calls."""
+import asyncio
 import pytest
 from pathlib import Path
 from codegrok_mcp.mcp.state import (
@@ -7,7 +8,12 @@ from codegrok_mcp.mcp.state import (
 from codegrok_mcp.mcp.server import learn as learn_tool
 
 # Access underlying function from FastMCP FunctionTool wrapper
-learn = learn_tool.fn
+learn_fn = learn_tool.fn
+
+
+def learn(**kwargs):
+    """Helper to run async learn function synchronously."""
+    return asyncio.get_event_loop().run_until_complete(learn_fn(**kwargs))
 
 
 class TestStateIsolation:
