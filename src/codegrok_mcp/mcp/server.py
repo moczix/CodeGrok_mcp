@@ -23,6 +23,7 @@ import asyncio
 
 from fastmcp import FastMCP, Context
 from fastmcp.exceptions import ToolError
+from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from codegrok_mcp.mcp.state import get_state
@@ -42,7 +43,33 @@ METADATA_FILE = 'metadata.json'
 # Initialize FastMCP server
 mcp = FastMCP(
     name="CodeGrok",
-    instructions="Semantic code search and source retrieval for codebase understanding"
+    instructions="""CodeGrok: Semantic code search + project memory.
+
+🚀 START: Call 'learn' with codebase path to enable all features.
+
+CODE SEARCH (after learn):
+• get_sources - Find relevant code using natural language queries
+• get_stats - Check index status (files, symbols, chunks indexed)
+• list_supported_languages - See supported file extensions
+
+PROJECT MEMORY (after learn):
+• remember - Store decisions, preferences, notes, status updates
+• recall - Retrieve memories by semantic search
+• forget - Remove outdated information (⚠️ destructive)
+• memory_stats - View memory statistics
+
+MEMORY REPLACES .md FILES FOR:
+- Architecture decisions ("We chose PostgreSQL because...")
+- User preferences ("Uses 4-space indent, prefers functional style")
+- Project status ("Auth module blocked on DB schema review")
+- Key discussions ("Discussed auth flow on 2025-01-15")
+- Documentation notes ("API returns paginated results, max 100")
+
+TYPICAL WORKFLOW:
+1. learn(path="/project") - Index codebase (required first step)
+2. recall("user preferences") - Check existing context
+3. remember("Decision: Using Redis for caching", memory_type="decision")
+4. get_sources("authentication flow") - Find relevant code"""
 )
 
 
@@ -129,14 +156,20 @@ def _create_relearn_progress_callback(ctx: Context, loop) -> Callable:
 
 @mcp.tool(
     name="learn",
-    description="""Index a codebase for semantic search.
+    description="""Index a codebase for semantic search. REQUIRED FIRST STEP before using any other tool.
 
 Modes:
 - auto (default): Smart detection. If index exists, updates incrementally. If new, does full index.
 - full: Force complete re-index (destroys existing index).
 - load_only: Just load existing index without any indexing.
 
-Creates a .codegrok/ folder in the codebase directory."""
+Creates a .codegrok/ folder in the codebase directory.""",
+    annotations=ToolAnnotations(
+        readOnlyHint=False,     # Creates/modifies .codegrok/ directory
+        destructiveHint=False,  # Doesn't destroy user data (only index data)
+        idempotentHint=True,    # Safe to re-run on same path
+        openWorldHint=False     # Only accesses local filesystem
+    )
 )
 async def learn(
     path: Annotated[str, Field(description="Absolute path to the codebase directory to index")],
@@ -323,7 +356,18 @@ async def _full_index(
 
 @mcp.tool(
     name="get_sources",
-    description="Get source code references relevant to a query using semantic search. Supports optional filtering by language and symbol type."
+    description="""Get source code references relevant to a query using semantic search. Requires 'learn' first.
+
+Supports optional filtering by language and symbol type. Returns ranked code chunks with file paths, line numbers, and relevance scores.
+
+Examples:
+- Find auth code: get_sources(question="authentication login flow")
+- Find Python classes: get_sources(question="user model", language="python", symbol_type="class")""",
+    annotations=ToolAnnotations(
+        readOnlyHint=True,      # Only reads from index
+        idempotentHint=True,    # Same query returns same results
+        openWorldHint=False     # Only accesses local ChromaDB
+    )
 )
 def get_sources(
     question: Annotated[str, Field(description="Natural language question or search query")],
@@ -366,7 +410,14 @@ def get_sources(
 
 @mcp.tool(
     name="get_stats",
-    description="Get statistics about the currently loaded codebase index."
+    description="""Get statistics about the currently loaded codebase index.
+
+Returns: files indexed, total chunks, symbols by type, languages detected, index creation time.""",
+    annotations=ToolAnnotations(
+        readOnlyHint=True,      # Only reads metadata
+        idempotentHint=True,    # Same state = same results
+        openWorldHint=False     # Only accesses local state
+    )
 )
 def get_stats() -> Dict[str, Any]:
     """Get indexing statistics."""
@@ -388,7 +439,14 @@ def get_stats() -> Dict[str, Any]:
 
 @mcp.tool(
     name="list_supported_languages",
-    description="List all programming languages and file extensions supported by CodeGrok."
+    description="""List all programming languages and file extensions supported by CodeGrok.
+
+Returns extensions grouped by language. Currently supports: Python, JavaScript, TypeScript, Go, Rust, Java, C, C++, Ruby, and more.""",
+    annotations=ToolAnnotations(
+        readOnlyHint=True,      # Returns static data
+        idempotentHint=True,    # Always same result
+        openWorldHint=False     # No external access
+    )
 )
 def list_supported_languages() -> Dict[str, Any]:
     """List supported file extensions and languages."""
@@ -406,6 +464,293 @@ def list_supported_languages() -> Dict[str, Any]:
     return {
         "extensions": sorted(EXTENSION_MAP.keys()),
         "languages": languages
+    }
+
+
+# =============================================================================
+# Memory Tools (Universal Memory Layer)
+# =============================================================================
+
+
+@mcp.tool(
+    name="remember",
+    description="""Store a memory for later retrieval. Requires 'learn' first to set project context.
+
+Memory types:
+- conversation: Chat history, Q&A exchanges, discussion summaries
+- status: Project status updates, blockers, progress notes
+- decision: Architecture decisions, technical choices, rationale
+- preference: User preferences, coding style, tool settings
+- doc: Documentation snippets, README content, API docs
+- note: General notes, reminders, TODOs
+
+TTL options:
+- session: Cleared after 24 hours
+- day: Kept for 1 day
+- week: Kept for 1 week
+- month: Kept for 30 days
+- permanent: Never expires (default)
+
+Examples:
+- Remember user prefers tabs: remember(content="User prefers tabs over spaces", memory_type="preference")
+- Remember a blocker: remember(content="Auth blocked on DB schema", memory_type="status", tags=["auth", "blocked"])
+- Remember a decision: remember(content="Using JWT with refresh tokens for auth", memory_type="decision", tags=["auth"])
+""",
+    annotations=ToolAnnotations(
+        readOnlyHint=False,     # Writes to ChromaDB
+        destructiveHint=False,  # Adds data, doesn't delete
+        idempotentHint=False,   # Creates new memory each call
+        openWorldHint=False     # Only local storage
+    )
+)
+def remember(
+    content: Annotated[str, Field(description="The memory content to store")],
+    memory_type: Annotated[
+        str,
+        Field(description="Type: conversation, status, decision, preference, doc, note")
+    ],
+    tags: Annotated[
+        Optional[List[str]],
+        Field(description="Optional tags for filtering (e.g., ['auth', 'backend'])")
+    ] = None,
+    ttl: Annotated[
+        str,
+        Field(description="Time-to-live: session, day, week, month, permanent (default)")
+    ] = "permanent"
+) -> Dict[str, Any]:
+    """Store a new memory with automatic embedding."""
+    from codegrok_mcp.indexing.memory_retriever import MemoryRetriever
+    from codegrok_mcp.core.models import MemoryType
+
+    state = get_state()
+
+    if not state.codebase_path:
+        raise ToolError("No codebase loaded. Use 'learn' first to set project context.")
+
+    # Initialize memory retriever if needed
+    if state.memory_retriever is None:
+        paths = _get_codegrok_paths(state.codebase_path)
+        state.memory_retriever = MemoryRetriever(
+            project_path=str(state.codebase_path),
+            persist_path=str(paths['chroma_path']),
+            verbose=False
+        )
+
+    # Validate memory_type
+    valid_types = [t.value for t in MemoryType]
+    if memory_type not in valid_types:
+        raise ToolError(f"Invalid memory_type '{memory_type}'. Must be one of: {valid_types}")
+
+    # Store memory
+    memory = state.memory_retriever.remember(
+        content=content,
+        memory_type=memory_type,
+        tags=tags or [],
+        ttl=ttl
+    )
+
+    return {
+        "success": True,
+        "memory_id": memory.id,
+        "message": f"Stored {memory_type} memory",
+        "tags": memory.tags
+    }
+
+
+@mcp.tool(
+    name="recall",
+    description="""Retrieve memories using semantic search. Requires 'learn' first to set project context.
+
+Searches across all stored memories (conversations, status, decisions, etc.)
+and returns the most relevant matches.
+
+Filters:
+- memory_type: Filter by type (conversation, status, decision, preference, doc, note)
+- tags: Filter by tags (returns memories matching ANY of the specified tags)
+- time_range: Filter by age (today, week, month, all)
+- n_results: Number of results to return (default: 5, max: 20)
+
+Examples:
+- What did we discuss about auth: recall(query="authentication implementation")
+- Get current blockers: recall(query="what is blocked", memory_type="status")
+- User preferences: recall(query="coding preferences", memory_type="preference")
+- Recent decisions: recall(query="architecture decisions", time_range="week")
+""",
+    annotations=ToolAnnotations(
+        readOnlyHint=True,      # Only reads from memory store
+        idempotentHint=True,    # Same query = same results
+        openWorldHint=False     # Only accesses local ChromaDB
+    )
+)
+def recall(
+    query: Annotated[str, Field(description="Natural language search query")],
+    memory_type: Annotated[
+        Optional[str],
+        Field(description="Filter by type: conversation, status, decision, preference, doc, note")
+    ] = None,
+    tags: Annotated[
+        Optional[List[str]],
+        Field(description="Filter by tags (matches any)")
+    ] = None,
+    n_results: Annotated[
+        int,
+        Field(description="Number of results (default: 5)", ge=1, le=20)
+    ] = 5,
+    time_range: Annotated[
+        Optional[str],
+        Field(description="Time filter: today, week, month, all")
+    ] = None
+) -> Dict[str, Any]:
+    """Retrieve memories using semantic search."""
+    from codegrok_mcp.indexing.memory_retriever import MemoryRetriever
+    from codegrok_mcp.core.models import MemoryType
+
+    state = get_state()
+
+    if not state.codebase_path:
+        raise ToolError("No codebase loaded. Use 'learn' first to set project context.")
+
+    # Initialize memory retriever if needed
+    if state.memory_retriever is None:
+        paths = _get_codegrok_paths(state.codebase_path)
+        state.memory_retriever = MemoryRetriever(
+            project_path=str(state.codebase_path),
+            persist_path=str(paths['chroma_path']),
+            verbose=False
+        )
+
+    # Validate memory_type if provided
+    if memory_type:
+        valid_types = [t.value for t in MemoryType]
+        if memory_type not in valid_types:
+            raise ToolError(f"Invalid memory_type '{memory_type}'. Must be one of: {valid_types}")
+
+    # Search memories
+    memories = state.memory_retriever.recall(
+        query=query,
+        memory_type=memory_type,
+        tags=tags,
+        n_results=n_results,
+        time_range=time_range
+    )
+
+    return {
+        "success": True,
+        "count": len(memories),
+        "memories": memories
+    }
+
+
+@mcp.tool(
+    name="forget",
+    description="""⚠️ DESTRUCTIVE: Remove memories matching specified criteria. Requires 'learn' first.
+
+Can delete by:
+- Specific memory ID
+- Memory type (all of that type)
+- Tags (any matching tag)
+- Age (older than specified duration)
+
+Examples:
+- Forget specific memory: forget(memory_id="abc-123")
+- Clear old conversations: forget(memory_type="conversation", older_than="30d")
+- Remove by tag: forget(tags=["deprecated", "outdated"])
+""",
+    annotations=ToolAnnotations(
+        readOnlyHint=False,     # Deletes from ChromaDB
+        destructiveHint=True,   # ⚠️ PERMANENTLY DELETES data
+        idempotentHint=True,    # Re-calling same filter is safe
+        openWorldHint=False     # Only local storage
+    )
+)
+def forget(
+    memory_id: Annotated[
+        Optional[str],
+        Field(description="Specific memory ID to delete")
+    ] = None,
+    memory_type: Annotated[
+        Optional[str],
+        Field(description="Delete all memories of this type")
+    ] = None,
+    tags: Annotated[
+        Optional[List[str]],
+        Field(description="Delete memories with any of these tags")
+    ] = None,
+    older_than: Annotated[
+        Optional[str],
+        Field(description="Delete memories older than: 1d, 7d, 30d, 1y")
+    ] = None
+) -> Dict[str, Any]:
+    """Remove memories matching criteria."""
+    from codegrok_mcp.indexing.memory_retriever import MemoryRetriever
+
+    state = get_state()
+
+    if not state.codebase_path:
+        raise ToolError("No codebase loaded. Use 'learn' first to set project context.")
+
+    if state.memory_retriever is None:
+        paths = _get_codegrok_paths(state.codebase_path)
+        state.memory_retriever = MemoryRetriever(
+            project_path=str(state.codebase_path),
+            persist_path=str(paths['chroma_path']),
+            verbose=False
+        )
+
+    if not any([memory_id, memory_type, tags, older_than]):
+        raise ToolError("Must specify at least one filter: memory_id, memory_type, tags, or older_than")
+
+    result = state.memory_retriever.forget(
+        memory_id=memory_id,
+        memory_type=memory_type,
+        tags=tags,
+        older_than=older_than
+    )
+
+    return {
+        "success": True,
+        "deleted": result["deleted"],
+        "message": f"Deleted {result['deleted']} memories"
+    }
+
+
+@mcp.tool(
+    name="memory_stats",
+    description="""Get statistics about stored memories for the current project.
+
+Returns: total memories, count by type, count by TTL, oldest/newest memory dates.""",
+    annotations=ToolAnnotations(
+        readOnlyHint=True,      # Only reads metadata
+        idempotentHint=True,    # Same state = same results
+        openWorldHint=False     # Only accesses local state
+    )
+)
+def memory_stats() -> Dict[str, Any]:
+    """Get memory statistics."""
+    from codegrok_mcp.indexing.memory_retriever import MemoryRetriever
+
+    state = get_state()
+
+    if not state.codebase_path:
+        return {
+            "loaded": False,
+            "message": "No codebase loaded. Use 'learn' first."
+        }
+
+    if state.memory_retriever is None:
+        paths = _get_codegrok_paths(state.codebase_path)
+        state.memory_retriever = MemoryRetriever(
+            project_path=str(state.codebase_path),
+            persist_path=str(paths['chroma_path']),
+            verbose=False
+        )
+
+    stats = state.memory_retriever.get_stats()
+
+    return {
+        "loaded": True,
+        "project": str(state.codebase_path),
+        **stats
     }
 
 

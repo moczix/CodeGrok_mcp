@@ -384,3 +384,111 @@ class CodebaseIndex:
         if 'files' in data:
             data['files'] = {path: ParsedFile.from_dict(f) for path, f in data['files'].items()}
         return cls(**data)
+
+
+# =============================================================================
+# Memory Models for Universal Memory Layer
+# =============================================================================
+
+
+class MemoryType(Enum):
+    """
+    Enumeration of memory types that can be stored and retrieved.
+
+    Attributes:
+        CONVERSATION: Chat history, Q&A exchanges, discussion summaries
+        STATUS: Project status updates, blockers, progress notes
+        DECISION: Architecture decisions, technical choices, rationale
+        PREFERENCE: User preferences, coding style, tool settings
+        DOC: Documentation snippets, README content, API docs
+        NOTE: General notes, reminders, TODOs
+    """
+    CONVERSATION = "conversation"
+    STATUS = "status"
+    DECISION = "decision"
+    PREFERENCE = "preference"
+    DOC = "doc"
+    NOTE = "note"
+
+    def __str__(self) -> str:
+        return self.value
+
+    @classmethod
+    def from_string(cls, value: str) -> 'MemoryType':
+        for member in cls:
+            if member.value == value.lower():
+                return member
+        raise ValueError(f"Invalid MemoryType: {value}")
+
+
+@dataclass
+class Memory:
+    """
+    Represents a single memory entry (conversation, status, decision, etc.).
+
+    Unlike Symbol (which is frozen/immutable), Memory is mutable because
+    we may update accessed_at timestamps for LRU tracking.
+
+    Attributes:
+        id: Unique identifier (UUID)
+        content: The actual memory content (text)
+        memory_type: Type of memory (CONVERSATION, STATUS, etc.)
+        project: Project identifier (typically codebase path)
+        tags: List of tags for filtering and organization
+        created_at: ISO 8601 timestamp when memory was created
+        accessed_at: ISO 8601 timestamp when memory was last accessed
+        ttl: Time-to-live policy ("session", "day", "week", "permanent")
+        source: Origin of memory ("user", "agent", "auto", "import")
+        metadata: Extensible dictionary for additional data
+    """
+    id: str
+    content: str
+    memory_type: MemoryType
+    project: str
+    tags: List[str] = field(default_factory=list)
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    accessed_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    ttl: str = "permanent"
+    source: str = "user"
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        """Validate memory data after initialization."""
+        if not self.id:
+            raise ValueError("Memory id cannot be empty")
+        if not self.content:
+            raise ValueError("Memory content cannot be empty")
+        if not self.project:
+            raise ValueError("Memory project cannot be empty")
+        if not isinstance(self.memory_type, MemoryType):
+            raise ValueError(f"memory_type must be MemoryType enum, got {type(self.memory_type)}")
+        valid_ttls = ("session", "day", "week", "month", "permanent")
+        if self.ttl not in valid_ttls:
+            raise ValueError(f"ttl must be one of {valid_ttls}, got {self.ttl}")
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert Memory to dictionary for serialization."""
+        return {
+            'id': self.id,
+            'content': self.content,
+            'memory_type': self.memory_type.value,
+            'project': self.project,
+            'tags': self.tags,
+            'created_at': self.created_at,
+            'accessed_at': self.accessed_at,
+            'ttl': self.ttl,
+            'source': self.source,
+            'metadata': self.metadata
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'Memory':
+        """Create Memory from dictionary."""
+        data = data.copy()
+        if 'memory_type' in data and isinstance(data['memory_type'], str):
+            data['memory_type'] = MemoryType.from_string(data['memory_type'])
+        return cls(**data)
+
+    def touch(self) -> None:
+        """Update accessed_at timestamp (for LRU tracking)."""
+        self.accessed_at = datetime.now(timezone.utc).isoformat()
