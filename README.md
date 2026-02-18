@@ -541,8 +541,39 @@ your-project/
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `CODEGROK_EMBEDDING_MODEL` | Embedding model to use | `nomic-embed-code` |
-| `CODEGROK_DEVICE` | Compute device (cpu/cuda/mps) | Auto-detect |
+| `CODEGROK_EMBEDDING_PROVIDER` | Embedding provider: `local` (SentenceTransformers) or `ollama` | `local` |
+| `CODEGROK_EMBEDDING_MODEL` | Embedding model to use (local provider) | `coderankembed` |
+| `CODEGROK_DEVICE` | Compute device: `cpu`, `cuda`, `mps` (local provider only) | Auto-detect |
+| `CODEGROK_OLLAMA_URL` | Ollama API URL (ollama provider) | `http://localhost:11434` |
+| `CODEGROK_OLLAMA_MODEL` | Model name in Ollama (ollama provider) | `nomic-embed-text` |
+| `CODEGROK_OLLAMA_DIMENSIONS` | Embedding dimensions (ollama provider, **required**) | - |
+
+### Ollama Support
+
+CodeGrok can use Ollama for remote embedding generation instead of local SentenceTransformers:
+
+```bash
+# Set provider to Ollama
+export CODEGROK_EMBEDDING_PROVIDER=ollama
+
+# Configure Ollama endpoint
+export CODEGROK_OLLAMA_URL=http://localhost:11434
+export CODEGROK_OLLAMA_MODEL=nomic-embed-text
+export CODEGROK_OLLAMA_DIMENSIONS=768  # Required!
+
+# Now run CodeGrok - it will use Ollama for embeddings
+codegrok-mcp
+```
+
+**Benefits of Ollama:**
+- Offload embedding computation to a dedicated server
+- Use custom embedding models not available via HuggingFace
+- Share embedding infrastructure across multiple clients
+
+**Requirements:**
+- Running Ollama server (`ollama serve`)
+- Pulled embedding model (`ollama pull nomic-embed-text`)
+- `CODEGROK_OLLAMA_DIMENSIONS` must match your model's output dimensions
 
 ### Embedding Models
 
