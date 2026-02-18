@@ -241,6 +241,11 @@ class SourceRetriever:
         if self.verbose:
             print(message)
 
+    # Maximum characters per chunk text for HTML (to stay within Ollama token limits)
+    # HTML elements can be very long due to nesting, so we limit them
+    # ~3000 chars ≈ 750 tokens, leaving room for other fields
+    MAX_HTML_CHUNK_TEXT_LENGTH = 3000
+
     def _create_chunk_text(self, symbol: Symbol) -> str:
         """
         Create embedding text from a symbol.
@@ -262,7 +267,7 @@ class SourceRetriever:
             symbol: Symbol to convert to chunk text
 
         Returns:
-            Formatted text suitable for embedding
+            Formatted text suitable for embedding (truncated for HTML if too long)
         """
         parts = [
             f"# {symbol.filepath}:{symbol.line_start}",
@@ -294,7 +299,13 @@ class SourceRetriever:
                 calls_str += f", ... ({len(symbol.calls) - 10} more)"
             parts.append(f"Calls: {calls_str}")
 
-        return "\n".join(parts)
+        text = "\n".join(parts)
+
+        # Truncate if too long for Ollama token limits (only for HTML)
+        if symbol.language == "html" and len(text) > self.MAX_HTML_CHUNK_TEXT_LENGTH:
+            text = text[: self.MAX_HTML_CHUNK_TEXT_LENGTH - 3] + "..."
+
+        return text
 
     def _create_chunk(self, symbol: Symbol) -> CodeChunk:
         """
@@ -415,7 +426,9 @@ class SourceRetriever:
             from codegrok_mcp.indexing.parallel_indexer import parallel_parse_files
 
             if not progress_callback:
-                self._log(f"  Using parallel parsing with {self.max_workers or 'auto'} workers...")
+                self._log(
+                    f"  Using parallel parsing with {self.max_workers or 'auto'} workers..."
+                )
 
             all_symbols, parse_errors = parallel_parse_files(
                 files=all_files,
@@ -444,7 +457,11 @@ class SourceRetriever:
                 except Exception as e:
                     self.stats["parse_errors"] += 1
                     emit("parse_error", {"path": str(filepath), "error": str(e)})
-                    if not progress_callback and self.verbose and self.stats["parse_errors"] <= 5:
+                    if (
+                        not progress_callback
+                        and self.verbose
+                        and self.stats["parse_errors"] <= 5
+                    ):
                         self._log(f"  Error parsing {filepath}: {e}")
 
                 # Legacy progress for no callback
@@ -453,7 +470,9 @@ class SourceRetriever:
 
         self.stats["total_symbols"] = len(all_symbols)
         if not progress_callback:
-            self._log(f"\nParsed {len(all_symbols):,} symbols from {len(all_files)} files")
+            self._log(
+                f"\nParsed {len(all_symbols):,} symbols from {len(all_files)} files"
+            )
 
         # Step 3: Create chunks
         if not progress_callback:
@@ -487,7 +506,9 @@ class SourceRetriever:
         emit("embedding_start", {"total": len(chunks), "eta_minutes": eta_minutes})
 
         if not progress_callback:
-            self._log(f"\nStep 5: Generating embeddings (ETA: ~{eta_minutes:.1f} minutes)...")
+            self._log(
+                f"\nStep 5: Generating embeddings (ETA: ~{eta_minutes:.1f} minutes)..."
+            )
             self._log("(You can interrupt and resume later)")
 
         batch_size = 100
@@ -649,7 +670,9 @@ class SourceRetriever:
             return False
 
         try:
-            self.collection = self.chroma_client.get_collection(name=self.collection_name)
+            self.collection = self.chroma_client.get_collection(
+                name=self.collection_name
+            )
             count = self.collection.count()
             self._log(f"Loaded existing index with {count:,} chunks")
             return True
@@ -762,7 +785,9 @@ class SourceRetriever:
         new_files = current_paths - stored_paths
         deleted_files = stored_paths - current_paths
         modified_files = {
-            p for p in (current_paths & stored_paths) if current_files[p] > stored_mtimes.get(p, 0)
+            p
+            for p in (current_paths & stored_paths)
+            if current_files[p] > stored_mtimes.get(p, 0)
         }
 
         files_to_reindex = new_files | modified_files
@@ -794,7 +819,9 @@ class SourceRetriever:
                     chunks_removed += 1
                 except Exception as e:
                     if self.verbose:
-                        self._log(f"Warning: Could not remove chunks for {filepath}: {e}")
+                        self._log(
+                            f"Warning: Could not remove chunks for {filepath}: {e}"
+                        )
 
         # 5. Parse and index new/modified files
         if files_to_reindex:
