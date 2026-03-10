@@ -54,7 +54,7 @@ class MemoryRetriever:
     def __init__(
         self,
         project_path: str,
-        embedding_model: str = "coderankembed",
+        embedding_model: str = "nomic-embed-text",
         verbose: bool = False,
         persist_path: Optional[str] = None,
         embedding_service: Optional[EmbeddingServiceBase] = None,
@@ -75,10 +75,8 @@ class MemoryRetriever:
         self.verbose = verbose
         self.persist_path = persist_path
 
-        # Reuse embedding service singleton (same model as code embeddings)
-        self.embedding_service = embedding_service or get_embedding_service(
-            embedding_model, show_progress=False
-        )
+        # Reuse Ollama embedding service singleton
+        self.embedding_service = embedding_service or get_embedding_service(show_progress=False)
 
         # Initialize ChromaDB (reuse existing client if possible)
         if persist_path:

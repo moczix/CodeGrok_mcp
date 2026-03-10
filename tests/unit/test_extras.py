@@ -20,20 +20,25 @@ class TestEmbeddingHelpers:
         mock_service.embed_batch.assert_called_with(["t1", "t2"], is_query=False)
 
 class TestSourceRetrieverExtras:
-    def test_parallel_init(self, tmp_path):
-        # Just check it initializes without error
-        sr = SourceRetriever(str(tmp_path), parallel=True, max_workers=2)
+    def test_parallel_init(self, tmp_path, mock_embedding_service):
+        sr = SourceRetriever(
+            str(tmp_path), parallel=True, max_workers=2, embedding_service=mock_embedding_service
+        )
         assert sr.parallel
         assert sr.max_workers == 2
 
-    def test_logging(self, tmp_path, capsys):
-        sr = SourceRetriever(str(tmp_path), verbose=True)
+    def test_logging(self, tmp_path, capsys, mock_embedding_service):
+        sr = SourceRetriever(
+            str(tmp_path), verbose=True, embedding_service=mock_embedding_service
+        )
         sr._log("test message")
         captured = capsys.readouterr()
         assert "test message" in captured.out
 
-    def test_logging_disabled(self, tmp_path, capsys):
-        sr = SourceRetriever(str(tmp_path), verbose=False)
+    def test_logging_disabled(self, tmp_path, capsys, mock_embedding_service):
+        sr = SourceRetriever(
+            str(tmp_path), verbose=False, embedding_service=mock_embedding_service
+        )
         sr._log("test message")
         captured = capsys.readouterr()
         assert "test message" not in captured.out

@@ -1,5 +1,7 @@
 # Security Audit Report: CodeGrok MCP
 
+> **Note:** This audit was written when the project supported local SentenceTransformers. The codebase has since been updated to **Ollama-only** embeddings (no local PyTorch/CUDA or HuggingFace model loading). Findings related to "trust_remote_code" or local embedding models may no longer apply.
+
 **Audit Date**: December 15, 2025
 **Auditor**: Claude Security Code Auditor
 **Codebase**: CodeGrok MCP v0.1.0

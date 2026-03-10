@@ -1,6 +1,7 @@
 import pytest
 import tempfile
 from pathlib import Path
+from unittest.mock import Mock
 from codegrok_mcp.mcp.state import reset_state, get_state
 
 @pytest.fixture(autouse=True)
@@ -60,3 +61,15 @@ def python_project_fixture():
 def multi_lang_fixture():
     """Return path to the static multi-language fixture."""
     return Path(__file__).parent / "fixtures" / "sample_projects" / "multi_lang"
+
+
+@pytest.fixture
+def mock_embedding_service():
+    """Mock embedding service (Ollama not required in tests). Returns 768-dim vectors."""
+    service = Mock()
+    service.embed.return_value = [0.1] * 768
+    service.embed_batch.side_effect = (
+        lambda texts, is_query=False, batch_size=None: [[0.1] * 768 for _ in texts]
+    )
+    service.dimensions = 768
+    return service

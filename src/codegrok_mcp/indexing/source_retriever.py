@@ -169,7 +169,7 @@ class SourceRetriever:
     def __init__(
         self,
         codebase_path: str,
-        embedding_model: str = "coderankembed",  # SOTA for code retrieval
+        embedding_model: str = "nomic-embed-text",  # Ollama model name (for metadata only)
         collection_name: str = "codebase",
         verbose: bool = True,
         persist_path: Optional[str] = None,
@@ -206,11 +206,10 @@ class SourceRetriever:
         # Initialize parser (use injected or create default)
         self.parser = parser or TreeSitterParser()
 
-        # Initialize embedding service (use injected or create default)
-        self._log(f"Using native embedding: {embedding_model}")
+        # Initialize embedding service (Ollama; use injected for tests)
+        self._log("Using Ollama embedding")
         self.embedding_service = embedding_service or get_embedding_service(
-            embedding_model,
-            show_progress=verbose,  # Only show tqdm progress bar if verbose
+            show_progress=verbose,
         )
 
         # Initialize ChromaDB (persistent or in-memory)
@@ -500,8 +499,8 @@ class SourceRetriever:
             metadata={"description": f"Code embeddings for {self.codebase_path.name}"},
         )
 
-        # Step 5: Generate embeddings and store
-        eta_minutes = len(chunks) / 50 / 60  # ~50 embeddings/sec native
+        # Step 5: Generate embeddings and store (via Ollama)
+        eta_minutes = len(chunks) / 30 / 60  # ~30 chunks/min typical for Ollama
 
         emit("embedding_start", {"total": len(chunks), "eta_minutes": eta_minutes})
 
@@ -557,7 +556,6 @@ class SourceRetriever:
                 # Generate embeddings for batch
                 texts = [chunk.text for chunk in batch]
 
-                # Native batch embedding (10-20x faster)
                 embeddings = self.embedding_service.embed_batch(texts)
 
                 # Add to ChromaDB

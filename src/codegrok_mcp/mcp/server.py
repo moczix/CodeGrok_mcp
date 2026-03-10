@@ -183,8 +183,8 @@ async def learn(
     ] = None,
     embedding_model: Annotated[
         str,
-        Field(description="Embedding model to use (default: coderankembed)")
-    ] = "coderankembed",
+        Field(description="Ollama embedding model name (default: nomic-embed-text)")
+    ] = "nomic-embed-text",
     ctx: Context = None
 ) -> Dict[str, Any]:
     """Index a codebase with smart mode detection."""

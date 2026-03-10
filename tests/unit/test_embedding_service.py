@@ -1,59 +1,91 @@
+"""Unit tests for Ollama-only embedding service."""
 
 import pytest
 from unittest.mock import MagicMock, patch
-from codegrok_mcp.indexing.embedding_service import EmbeddingService, get_embedding_service, reset_embedding_service
+from codegrok_mcp.indexing.embedding_service import (
+    OllamaEmbeddingService,
+    get_embedding_service,
+    reset_embedding_service,
+    create_embedding_service,
+)
 
-class TestEmbeddingService:
+
+class TestOllamaEmbeddingService:
     def teardown_method(self):
         reset_embedding_service()
 
     def test_embed_empty_batch(self):
-        service = EmbeddingService(model_name="all-MiniLM-L6-v2")
-        # Mock _model to avoid downloading/loading
-        service._model = MagicMock()
-        service._model_loaded = True
-        
-        result = service.embed_batch([])
-        assert result == []
+        with patch("codegrok_mcp.indexing.embedding_service.OllamaEmbeddingService._requests") as mock_req:
+            service = OllamaEmbeddingService(
+                base_url="http://localhost:11434",
+                model="nomic-embed-text",
+                dimensions=768,
+            )
+            service._requests = mock_req
+            result = service.embed_batch([])
+            assert result == []
+
+    def test_embed_batch_calls_ollama(self):
+        with patch("codegrok_mcp.indexing.embedding_service.OllamaEmbeddingService._requests") as mock_req:
+            mock_req.post.return_value.json.return_value = {"embedding": [0.1] * 768}
+            mock_req.post.return_value.raise_for_status = MagicMock()
+            service = OllamaEmbeddingService(
+                base_url="http://localhost:11434",
+                model="nomic-embed-text",
+                dimensions=768,
+            )
+            service._requests = mock_req
+            result = service.embed_batch(["text1", "text2"])
+            assert len(result) == 2
+            assert len(result[0]) == 768
+            assert mock_req.post.call_count >= 2
 
     def test_cache_statistics(self):
-        service = EmbeddingService(model_name="all-MiniLM-L6-v2")
-        
-        # Mock dependencies
-        with patch('codegrok_mcp.indexing.embedding_service._sentence_transformers') as mock_st:
-            mock_model = MagicMock()
-            # mock encode return value
-            import numpy as np
-            mock_model.encode.return_value = np.array([[0.1, 0.2]])
-            mock_model.get_sentence_embedding_dimension.return_value = 2
-            
-            # Manually load mock model
-            service._model = mock_model
-            service.config['dimensions'] = 2
-            service._model_loaded = True
-            
+        with patch("codegrok_mcp.indexing.embedding_service.OllamaEmbeddingService._requests") as mock_req:
+            mock_req.post.return_value.json.return_value = {"embedding": [0.1] * 768}
+            mock_req.post.return_value.raise_for_status = MagicMock()
+            service = OllamaEmbeddingService(
+                base_url="http://localhost:11434",
+                model="nomic-embed-text",
+                dimensions=768,
+            )
+            service._requests = mock_req
             service.embed("test")
-            service.embed("test")  # Cache hit
-            
+            service.embed("test")  # cache hit
             stats = service.get_cache_stats()
-            
-            assert service.stats['cache_hits'] == 1
-            assert service.stats['cache_misses'] == 1
-            assert stats['hits'] == 1
+            assert stats["hits"] == 1
+            assert stats["misses"] == 1
 
-    def test_unload_model(self):
-        service = EmbeddingService(model_name="all-MiniLM-L6-v2")
-        service._model = MagicMock()
-        service._model_loaded = True
-        
-        service.unload()
-        assert service._model is None
-        assert service._model_loaded is False
+    def test_unload_clears_cache(self):
+        with patch("codegrok_mcp.indexing.embedding_service.OllamaEmbeddingService._requests") as mock_req:
+            service = OllamaEmbeddingService(
+                base_url="http://localhost:11434",
+                model="nomic-embed-text",
+                dimensions=768,
+            )
+            service.unload()
+            # No exception; cache cleared
+            assert service._embed_cached.cache_info().currsize == 0
 
     def test_singleton_pattern(self):
         reset_embedding_service()
-        # Mock dependencies to avoid import errors if not installed
-        with patch('codegrok_mcp.indexing.embedding_service._import_dependencies'):
+        with patch.dict("os.environ", {"CODEGROK_OLLAMA_MODEL": "nomic-embed-text"}, clear=False):
             s1 = get_embedding_service()
             s2 = get_embedding_service()
             assert s1 is s2
+
+    def test_create_embedding_service_from_env(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "CODEGROK_OLLAMA_URL": "http://custom:11434",
+                "CODEGROK_OLLAMA_MODEL": "custom-model",
+                "CODEGROK_OLLAMA_DIMENSIONS": "256",
+            },
+            clear=False,
+        ):
+            reset_embedding_service()
+            service = create_embedding_service()
+            assert service.base_url == "http://custom:11434"
+            assert service.model == "custom-model"
+            assert service.dimensions == 256

@@ -10,7 +10,7 @@ src/codegrok_mcp/
 ├── core/interfaces.py       # IParser abstract interface
 ├── parsers/treesitter_parser.py  # Multi-language AST parsing (9 languages)
 ├── parsers/language_configs.py   # Tree-sitter node → SymbolType mappings
-├── indexing/embedding_service.py # EmbeddingServiceBase + Native/Ollama implementations
+├── indexing/embedding_service.py # EmbeddingServiceBase + OllamaEmbeddingService (Ollama only)
 ├── indexing/parallel_indexer.py  # Thread-pool file processing
 ├── indexing/source_retriever.py  # Code indexing + semantic search
 ├── indexing/memory_retriever.py  # Memory storage + semantic recall
@@ -39,10 +39,8 @@ src/codegrok_mcp/
 
 ## Key Constants
 
-- **Embedding Provider**: Local (SentenceTransformers) or Ollama API
-- **Embedding Models**:
-  - Local: `nomic-ai/CodeRankEmbed` (768 dims, 8192 max tokens, default)
-  - Ollama: Configurable via `CODEGROK_OLLAMA_MODEL`
+- **Embedding**: Ollama API only (no local PyTorch/CUDA/SentenceTransformers)
+- **Ollama**: `CODEGROK_OLLAMA_URL`, `CODEGROK_OLLAMA_MODEL` (default `nomic-embed-text`), `CODEGROK_OLLAMA_DIMENSIONS` (default 768)
 - **Chunk Strategy**: Symbol-based (each function/class/method = 1 chunk)
 - **Max Chunk Size**: 4000 chars (~1000-1300 tokens)
 - **Storage**: `.codegrok/` (chromadb/ + metadata.json + memory_metadata.json)
@@ -69,8 +67,7 @@ mypy src/                 # Type check
 6. **Embedding is cached** - LRU(1000) + batch processing in embedding_service.py
 7. **Memory tags stored as CSV** - ChromaDB doesn't support list metadata; tags joined with commas
 8. **All tools require `learn` first** - Except `list_supported_languages` (static data)
-9. **Embedding provider configurable via env vars** - `CODEGROK_EMBEDDING_PROVIDER=local|ollama`
-10. **Ollama requires CODEGROK_OLLAMA_DIMENSIONS** - Must specify embedding dimensions when using Ollama
+9. **Ollama required** - Embeddings only via Ollama API; no local AI stack. Set `CODEGROK_OLLAMA_*` if needed (defaults: URL localhost:11434, model nomic-embed-text, dimensions 768)
 
 ## Adding Languages
 

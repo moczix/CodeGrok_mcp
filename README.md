@@ -43,8 +43,8 @@ CodeGrok: Returns auth middleware, login handlers, JWT validation code...
 - **Fast Parallel Indexing** - 3-5x faster with multi-threaded parsing
 - **Incremental Updates** - Only re-index changed files (auto mode)
 - **Local & Private** - All data stays on your machine in `.codegrok/` folder
-- **Zero LLM Dependencies** - Lightweight, focused tool (no API keys required)
-- **GPU Acceleration** - Auto-detects CUDA for faster embeddings
+- **Ollama-only Embeddings** - No local AI stack (no CUDA, PyTorch, or large model downloads)
+- **Lightweight Install** - Small dependency footprint; embeddings via Ollama API
 - **Works with Any MCP Client** - Claude, Cursor, Cline, and more
 
 ---
@@ -95,20 +95,26 @@ CodeGrok: Returns auth middleware, login handlers, JWT validation code...
 
 | Constraint | Impact |
 |------------|--------|
-| **First index is slow** | ~50 chunks/second (~3-4 min for 10K symbols) |
-| **Memory usage** | Embedding models use 500MB-2GB RAM |
-| **Model download** | First run downloads ~500MB model from HuggingFace |
-| **Query latency** | ~50-100ms per search |
+| **Ollama required** | Must have [Ollama](https://ollama.com) running with an embedding model (e.g. `ollama pull nomic-embed-text`) |
+| **First index** | Speed depends on Ollama; typically ~20-50 chunks/min |
+| **Query latency** | ~100-300ms per search (Ollama API round-trip) |
 
 ---
 
 ## Quick Start
 
+### Prerequisites
+
+- **Ollama** – [Install Ollama](https://ollama.com) and pull an embedding model:
+  ```bash
+  ollama pull nomic-embed-text
+  ```
+
 ### Installation
 
 ```bash
 # Clone the repository
-git clone https://github.com/rdondeti/CodeGrok_mcp.git
+git clone https://github.com/dondetir/CodeGrok_mcp
 cd CodeGrok_mcp
 
 # Option 1: Use setup script (recommended)
@@ -116,7 +122,7 @@ cd CodeGrok_mcp
 # or
 .\setup.ps1             # Windows PowerShell
 
-# Option 2: Manual install
+# Option 2: Manual install (lightweight – no CUDA/PyTorch)
 python -m venv .venv
 source .venv/bin/activate  # Linux/macOS
 pip install -e .
@@ -124,6 +130,14 @@ pip install -e .
 # Verify installation
 codegrok-mcp --help
 ```
+
+Optional environment variables (defaults shown):
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CODEGROK_OLLAMA_URL` | `http://localhost:11434` | Ollama API base URL |
+| `CODEGROK_OLLAMA_MODEL` | `nomic-embed-text` | Embedding model name |
+| `CODEGROK_OLLAMA_DIMENSIONS` | `768` | Vector size (must match model) |
 
 **Setup script options:**
 | Flag | Description |
@@ -372,7 +386,7 @@ CodeGrok provides **4 tools** for AI assistants:
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
-| `learn` | Index a codebase (smart modes) | `path` (required), `mode` (auto/full/load_only), `file_extensions`, `embedding_model` |
+| `learn` | Index a codebase (smart modes) | `path` (required), `mode` (auto/full/load_only), `file_extensions`, `embedding_model` (Ollama model name) |
 | `get_sources` | Semantic code search | `question` (required), `n_results` (1-50, default: 10), `language`, `symbol_type` |
 | `get_stats` | Get index statistics | None |
 | `list_supported_languages` | List supported languages | None |
@@ -494,8 +508,8 @@ CodeGrok provides **4 tools** for AI assistants:
 ├─────────────────────────────────────────────────────────────┤
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
 │  │   Parsers   │  │  Embeddings │  │   Vector Storage    │  │
-│  │ (Tree-sitter)│  │ (Sentence   │  │    (ChromaDB)       │  │
-│  │             │  │ Transformers)│  │                     │  │
+│  │ (Tree-sitter)│  │  (Ollama    │  │    (ChromaDB)       │  │
+│  │             │  │   API)      │  │                     │  │
 │  └─────────────┘  └─────────────┘  └─────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -504,12 +518,12 @@ CodeGrok provides **4 tools** for AI assistants:
 
 ```
 Source Files → Tree-sitter Parser → Symbol Extraction →
-Code Chunks → Embeddings → ChromaDB Storage
+Code Chunks → Ollama Embeddings → ChromaDB Storage
 ```
 
 1. **Parse**: Tree-sitter extracts functions, classes, methods with signatures
 2. **Chunk**: Code is split into semantic chunks with context (docstrings, imports, calls)
-3. **Embed**: Sentence-transformers create vector embeddings
+3. **Embed**: Ollama API generates vector embeddings (no local CUDA/PyTorch)
 4. **Store**: ChromaDB persists vectors locally in `.codegrok/`
 
 ### Search Pipeline
@@ -541,71 +555,36 @@ your-project/
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `CODEGROK_EMBEDDING_PROVIDER` | Embedding provider: `local` (SentenceTransformers) or `ollama` | `local` |
-| `CODEGROK_EMBEDDING_MODEL` | Embedding model to use (local provider) | `coderankembed` |
-| `CODEGROK_DEVICE` | Compute device: `cpu`, `cuda`, `mps` (local provider only) | Auto-detect |
-| `CODEGROK_OLLAMA_URL` | Ollama API URL (ollama provider) | `http://localhost:11434` |
-| `CODEGROK_OLLAMA_MODEL` | Model name in Ollama (ollama provider) | `nomic-embed-text` |
-| `CODEGROK_OLLAMA_DIMENSIONS` | Embedding dimensions (ollama provider, **required**) | - |
+| `CODEGROK_OLLAMA_URL` | Ollama API base URL | `http://localhost:11434` |
+| `CODEGROK_OLLAMA_MODEL` | Embedding model name in Ollama | `nomic-embed-text` |
+| `CODEGROK_OLLAMA_DIMENSIONS` | Vector dimensions (must match model) | `768` |
 
-### Ollama Support
+### Ollama (required)
 
-CodeGrok can use Ollama for remote embedding generation instead of local SentenceTransformers:
+CodeGrok uses **only Ollama** for embeddings (no local PyTorch/CUDA). Install and run Ollama, then pull an embedding model:
 
 ```bash
-# Set provider to Ollama
-export CODEGROK_EMBEDDING_PROVIDER=ollama
+# Install Ollama from https://ollama.com, then:
+ollama pull nomic-embed-text
 
-# Configure Ollama endpoint
+# Optional: custom URL or model
 export CODEGROK_OLLAMA_URL=http://localhost:11434
 export CODEGROK_OLLAMA_MODEL=nomic-embed-text
-export CODEGROK_OLLAMA_DIMENSIONS=768  # Required!
+export CODEGROK_OLLAMA_DIMENSIONS=768   # default for nomic-embed-text
 
-# Now run CodeGrok - it will use Ollama for embeddings
 codegrok-mcp
 ```
 
-**Benefits of Ollama:**
-- Offload embedding computation to a dedicated server
-- Use custom embedding models not available via HuggingFace
-- Share embedding infrastructure across multiple clients
-
 **Requirements:**
-- Running Ollama server (`ollama serve`)
-- Pulled embedding model (`ollama pull nomic-embed-text`)
-- `CODEGROK_OLLAMA_DIMENSIONS` must match your model's output dimensions
+- Running Ollama server (e.g. `ollama serve` or start Ollama app)
+- An embedding model pulled (e.g. `ollama pull nomic-embed-text`)
+- Dimensions in env must match the model (768 for nomic-embed-text)
 
-### Embedding Models
+### Embedding models (Ollama)
 
-| Model | Size | Best For |
-|-------|------|----------|
-| `coderankembed` | 768d / 137M | **Code (default, recommended)** - uses `nomic-ai/CodeRankEmbed` |
-
-The default model (`nomic-ai/CodeRankEmbed`) is optimized for code retrieval with:
-- 768-dimensional embeddings
-- 8192 max sequence length
-- State-of-the-art performance on CodeSearchNet benchmarks
-
-### Security Note: `trust_remote_code`
-
-The default embedding model (`nomic-ai/CodeRankEmbed`) requires `trust_remote_code=True` when loading via SentenceTransformers. This flag allows execution of custom Python code bundled with the model.
-
-**Why it's required:**
-- The model uses a custom Nomic BERT architecture that isn't part of the standard HuggingFace model library
-- Custom files: `modeling_hf_nomic_bert.py` (model architecture), `configuration_hf_nomic_bert.py` (config)
-
-**Security audit:**
-The custom code has been reviewed and contains:
-- Standard PyTorch neural network definitions
-- No `exec()`, `eval()`, or dynamic code execution
-- No subprocess or shell commands
-- No network requests beyond HuggingFace's standard model download APIs
-- Only imports from trusted libraries (torch, transformers, einops, safetensors)
-
-**For maximum security:**
-- Review the model code yourself: [nomic-ai/CodeRankEmbed on HuggingFace](https://huggingface.co/nomic-ai/CodeRankEmbed/tree/main)
-- Pin to a specific model revision in production deployments
-- Consider using Microsoft CodeBERT (`microsoft/codebert-base`) as an alternative that doesn't require `trust_remote_code` (with potential quality trade-offs)
+| Model | Dimensions | Notes |
+|-------|------------|--------|
+| `nomic-embed-text` | 768 | Default; good for code and text |
 
 ---
 
@@ -694,7 +673,7 @@ pip install -e .
 <summary><strong>Out of memory</strong></summary>
 
 - Index smaller portions of the codebase
-- The default `coderankembed` model uses ~500MB-2GB RAM
+- Ensure Ollama has enough RAM for the embedding model
 - Close other applications
 </details>
 
@@ -754,7 +733,7 @@ MIT License - see [LICENSE](LICENSE) for details.
 - **[Model Context Protocol](https://modelcontextprotocol.io/)** - The protocol that powers this integration
 - **[Tree-sitter](https://tree-sitter.github.io/tree-sitter/)** - Fast, accurate code parsing
 - **[ChromaDB](https://www.trychroma.com/)** - Vector database for embeddings
-- **[Sentence Transformers](https://www.sbert.net/)** - State-of-the-art embeddings
+- **[Ollama](https://ollama.com)** - Local embedding API used by CodeGrok
 
 ---
 
