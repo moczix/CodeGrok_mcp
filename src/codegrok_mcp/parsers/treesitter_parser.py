@@ -29,8 +29,10 @@ Usage:
 """
 
 import logging
+import re
 import time
 import threading
+from dataclasses import replace
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Any
 
@@ -217,6 +219,17 @@ class TreeSitterParser(IParser):
             symbols = self._extract_symbols(
                 root_node, content, filepath, language, config
             )
+            # Prepend file-level header (top-of-file description) to first symbol
+            if symbols:
+                file_header = self._get_file_header(content, language)
+                if file_header:
+                    first = symbols[0]
+                    new_doc = (
+                        file_header + "\n\n" + first.docstring
+                        if first.docstring
+                        else file_header
+                    )
+                    symbols = [replace(first, docstring=new_doc)] + symbols[1:]
             imports = self._extract_imports(root_node, content, config)
 
             parse_time = time.time() - start_time
@@ -622,8 +635,11 @@ class TreeSitterParser(IParser):
         # Extract signature
         signature = self._get_node_text(node, content).split("\n")[0].strip()
 
-        # Extract docstring
+        # Extract docstring (body) and leading comment above this node
         docstring = self._extract_docstring(node, content, config)
+        leading = self._get_leading_comment_before_node(node, content, language)
+        if leading:
+            docstring = (leading + "\n\n" + docstring) if docstring else leading
 
         # Extract code snippet
         code_snippet = self._get_code_snippet(node, content)
@@ -685,8 +701,11 @@ class TreeSitterParser(IParser):
         # Extract signature
         signature = self._get_node_text(node, content).split("\n")[0].strip()
 
-        # Extract docstring
+        # Extract docstring (body) and leading comment above this node
         docstring = self._extract_docstring(node, content, config)
+        leading = self._get_leading_comment_before_node(node, content, language)
+        if leading:
+            docstring = (leading + "\n\n" + docstring) if docstring else leading
 
         # Extract code snippet
         code_snippet = self._get_code_snippet(node, content)
@@ -1111,6 +1130,105 @@ class TreeSitterParser(IParser):
             return text[: self.MAX_CODE_SNIPPET_CHARS] + "..."
 
         return text
+
+    def _get_leading_comment_before_node(self, node, content: bytes, language: str) -> str:
+        """
+        Extract comment block immediately above this node (e.g. # or // above def/func).
+
+        Uses raw bytes before node.start_byte; strips comment markers and returns
+        at most one block of lines (up to ~800 chars). Tree-sitter often omits
+        comments from AST, so we use text-based heuristics.
+        """
+        if node.start_byte <= 0:
+            return ""
+        try:
+            before = content[: node.start_byte].decode("utf-8", errors="ignore")
+        except Exception:
+            return ""
+        # Take last portion (comment is usually right above the symbol)
+        max_chars = 1200
+        if len(before) > max_chars:
+            before = before[-max_chars:]
+        lines = before.splitlines()
+        # Keep only trailing lines that look like comments or blank
+        comment_lines: List[str] = []
+        for line in reversed(lines):
+            stripped = line.strip()
+            if not stripped:
+                comment_lines.append("")
+                continue
+            # Strip common comment prefixes
+            if stripped.startswith("#"):
+                comment_lines.append(re.sub(r"^\s*#+\s*", "", line.strip()))
+                continue
+            if stripped.startswith("//"):
+                comment_lines.append(re.sub(r"^\s*//+\s*", "", line.strip()))
+                continue
+            if stripped.startswith("*") and not stripped.startswith("**"):
+                comment_lines.append(re.sub(r"^\s*\*+\s*", "", line.strip()))
+                continue
+            if stripped.startswith("/*") or stripped.startswith("*"):
+                comment_lines.append(
+                    re.sub(r"^\s*/\*\s*|\s*\*/\s*$", "", line.strip()).strip()
+                )
+                continue
+            if stripped.startswith("'''") or stripped.startswith('"""'):
+                comment_lines.append(self._clean_docstring(stripped))
+                continue
+            # Non-comment line: stop (we want only the block directly above)
+            break
+        if not comment_lines:
+            return ""
+        comment_lines.reverse()
+        text = "\n".join(l for l in comment_lines if l is not None).strip()
+        return text[:800] if len(text) > 800 else text
+
+    def _get_file_header(self, content: bytes, language: str) -> str:
+        """
+        Extract file-level description from the top of the file (comments + module docstring).
+
+        Returns at most ~600 chars of leading comment/docstring lines for semantic search.
+        """
+        try:
+            text = content[: 3000].decode("utf-8", errors="ignore")
+        except Exception:
+            return ""
+        lines = text.splitlines()
+        kept: List[str] = []
+        for line in lines[: 50]:
+            stripped = line.strip()
+            if not stripped:
+                kept.append("")
+                continue
+            if stripped.startswith("#!") and len(kept) == 0:
+                continue  # Skip shebang
+            if stripped.startswith("#"):
+                kept.append(re.sub(r"^\s*#+\s*", "", stripped))
+                continue
+            if stripped.startswith("//"):
+                kept.append(re.sub(r"^\s*//+\s*", "", stripped))
+                continue
+            if stripped.startswith("*") and not stripped.startswith("**"):
+                kept.append(re.sub(r"^\s*\*+\s*", "", stripped))
+                continue
+            if stripped.startswith("/*"):
+                kept.append(re.sub(r"^\s*/\*\s*|\s*\*/\s*$", "", stripped).strip())
+                continue
+            if stripped.startswith('"""') or stripped.startswith("'''"):
+                # Module docstring - take first paragraph
+                kept.append(self._clean_docstring(stripped))
+                continue
+            # Stop at first non-comment, non-empty code line (imports/def/class we keep going for a bit via block comment)
+            if language == "python" and (
+                stripped.startswith("import ") or stripped.startswith("from ")
+            ):
+                continue
+            if re.match(r"^(def |class |function |export |const |let |var )", stripped):
+                break
+            # Unknown line: treat as end of header
+            break
+        result = "\n".join(kept).strip()
+        return result[:600] if len(result) > 600 else result
 
     def _clean_docstring(self, raw_docstring: str) -> str:
         """
