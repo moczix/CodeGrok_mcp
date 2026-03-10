@@ -21,11 +21,20 @@ import os
 import threading
 from abc import ABC, abstractmethod
 from functools import lru_cache
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union, cast
 
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 DEFAULT_OLLAMA_MODEL = "nomic-embed-text"
 DEFAULT_OLLAMA_DIMENSIONS = 768
+
+
+def _get_ollama_base_url() -> str:
+    """Resolve Ollama URL from env with compatibility fallback."""
+    return (
+        os.environ.get("CODEGROK_OLLAMA_URL")
+        or os.environ.get("OLLAMA_HOST")
+        or DEFAULT_OLLAMA_URL
+    )
 
 
 class EmbeddingServiceBase(ABC):
@@ -34,7 +43,9 @@ class EmbeddingServiceBase(ABC):
     Single implementation: OllamaEmbeddingService (Ollama API).
     """
 
-    def __init__(self, dimensions: int, batch_size: int = 32, show_progress: bool = False):
+    def __init__(
+        self, dimensions: int, batch_size: int = 32, show_progress: bool = False
+    ):
         self.dimensions = dimensions
         self.batch_size = batch_size
         self.show_progress = show_progress
@@ -78,7 +89,9 @@ class EmbeddingServiceBase(ABC):
         """Get embedding statistics."""
         stats = self.stats.copy()
         stats["embeddings_per_second"] = (
-            stats["total_embeddings"] / stats["total_time"] if stats["total_time"] > 0 else 0
+            stats["total_embeddings"] / stats["total_time"]
+            if stats["total_time"] > 0
+            else 0
         )
         return stats
 
@@ -86,7 +99,9 @@ class EmbeddingServiceBase(ABC):
         """Get embedding cache statistics."""
         cache_info = self._embed_cached.cache_info()
         total_requests = self.stats["cache_hits"] + self.stats["cache_misses"]
-        hit_rate = self.stats["cache_hits"] / total_requests if total_requests > 0 else 0.0
+        hit_rate = (
+            self.stats["cache_hits"] / total_requests if total_requests > 0 else 0.0
+        )
         return {
             "hits": self.stats["cache_hits"],
             "misses": self.stats["cache_misses"],
@@ -143,13 +158,16 @@ class OllamaEmbeddingService(EmbeddingServiceBase):
 
         try:
             import requests
+
             self._requests = requests
         except ImportError:
             raise ImportError(
                 "requests is required for Ollama embedding. Install with: pip install requests"
             )
 
-        super().__init__(dimensions=dimensions, batch_size=batch_size, show_progress=show_progress)
+        super().__init__(
+            dimensions=dimensions, batch_size=batch_size, show_progress=show_progress
+        )
 
     def _embed_single_uncached(self, text: str, is_query: bool) -> tuple:
         """Embed a single text via Ollama API."""
@@ -173,7 +191,10 @@ class OllamaEmbeddingService(EmbeddingServiceBase):
                         f"Failed to get embedding from Ollama after {self.max_retries} attempts: {e}"
                     )
                 import time
+
                 time.sleep(0.5 * (attempt + 1))
+
+        raise RuntimeError("Failed to get embedding from Ollama")
 
     def embed_batch(
         self,
@@ -211,10 +232,11 @@ class OllamaEmbeddingService(EmbeddingServiceBase):
         """Embed a batch of texts in parallel using threads."""
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        embeddings = [None] * len(texts)
+        embeddings: List[Optional[List[float]]] = [None] * len(texts)
         with ThreadPoolExecutor(max_workers=min(len(texts), 8)) as executor:
             future_to_idx = {
-                executor.submit(self._embed_with_retry, text): idx for idx, text in enumerate(texts)
+                executor.submit(self._embed_with_retry, text): idx
+                for idx, text in enumerate(texts)
             }
             for future in as_completed(future_to_idx):
                 idx = future_to_idx[future]
@@ -222,7 +244,10 @@ class OllamaEmbeddingService(EmbeddingServiceBase):
                     embeddings[idx] = future.result()
                 except Exception as e:
                     raise RuntimeError(f"Failed to embed text at index {idx}: {e}")
-        return embeddings
+        if any(embedding is None for embedding in embeddings):
+            raise RuntimeError("Failed to embed one or more texts")
+
+        return cast(List[List[float]], embeddings)
 
     def unload(self):
         """Clear cache; model lives in Ollama server."""
@@ -235,7 +260,7 @@ def create_embedding_service(**kwargs) -> EmbeddingServiceBase:
 
     Env: CODEGROK_OLLAMA_URL, CODEGROK_OLLAMA_MODEL, CODEGROK_OLLAMA_DIMENSIONS
     """
-    base_url = os.environ.get("CODEGROK_OLLAMA_URL", DEFAULT_OLLAMA_URL)
+    base_url = _get_ollama_base_url()
     model = os.environ.get("CODEGROK_OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL)
     dimensions_str = os.environ.get("CODEGROK_OLLAMA_DIMENSIONS")
     dimensions = int(dimensions_str) if dimensions_str else DEFAULT_OLLAMA_DIMENSIONS
@@ -244,7 +269,11 @@ def create_embedding_service(**kwargs) -> EmbeddingServiceBase:
         base_url=base_url,
         model=model,
         dimensions=dimensions,
-        **{k: v for k, v in kwargs.items() if k in ("batch_size", "max_retries", "timeout", "show_progress")},
+        **{
+            k: v
+            for k, v in kwargs.items()
+            if k in ("batch_size", "max_retries", "timeout", "show_progress")
+        },
     )
 
 
@@ -258,7 +287,8 @@ def get_embedding_service(**kwargs) -> EmbeddingServiceBase:
     """
     global _embedding_services
     model = os.environ.get("CODEGROK_OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL)
-    cache_key = f"ollama:{model}"
+    base_url = _get_ollama_base_url().rstrip("/")
+    cache_key = f"ollama:{model}:{base_url}"
 
     if cache_key not in _embedding_services:
         with _singleton_lock:

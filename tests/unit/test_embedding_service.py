@@ -15,7 +15,9 @@ class TestOllamaEmbeddingService:
         reset_embedding_service()
 
     def test_embed_empty_batch(self):
-        with patch("codegrok_mcp.indexing.embedding_service.OllamaEmbeddingService._requests") as mock_req:
+        with patch(
+            "codegrok_mcp.indexing.embedding_service.OllamaEmbeddingService._requests"
+        ) as mock_req:
             service = OllamaEmbeddingService(
                 base_url="http://localhost:11434",
                 model="nomic-embed-text",
@@ -26,7 +28,9 @@ class TestOllamaEmbeddingService:
             assert result == []
 
     def test_embed_batch_calls_ollama(self):
-        with patch("codegrok_mcp.indexing.embedding_service.OllamaEmbeddingService._requests") as mock_req:
+        with patch(
+            "codegrok_mcp.indexing.embedding_service.OllamaEmbeddingService._requests"
+        ) as mock_req:
             mock_req.post.return_value.json.return_value = {"embedding": [0.1] * 768}
             mock_req.post.return_value.raise_for_status = MagicMock()
             service = OllamaEmbeddingService(
@@ -41,7 +45,9 @@ class TestOllamaEmbeddingService:
             assert mock_req.post.call_count >= 2
 
     def test_cache_statistics(self):
-        with patch("codegrok_mcp.indexing.embedding_service.OllamaEmbeddingService._requests") as mock_req:
+        with patch(
+            "codegrok_mcp.indexing.embedding_service.OllamaEmbeddingService._requests"
+        ) as mock_req:
             mock_req.post.return_value.json.return_value = {"embedding": [0.1] * 768}
             mock_req.post.return_value.raise_for_status = MagicMock()
             service = OllamaEmbeddingService(
@@ -57,7 +63,9 @@ class TestOllamaEmbeddingService:
             assert stats["misses"] == 1
 
     def test_unload_clears_cache(self):
-        with patch("codegrok_mcp.indexing.embedding_service.OllamaEmbeddingService._requests") as mock_req:
+        with patch(
+            "codegrok_mcp.indexing.embedding_service.OllamaEmbeddingService._requests"
+        ) as mock_req:
             service = OllamaEmbeddingService(
                 base_url="http://localhost:11434",
                 model="nomic-embed-text",
@@ -69,7 +77,9 @@ class TestOllamaEmbeddingService:
 
     def test_singleton_pattern(self):
         reset_embedding_service()
-        with patch.dict("os.environ", {"CODEGROK_OLLAMA_MODEL": "nomic-embed-text"}, clear=False):
+        with patch.dict(
+            "os.environ", {"CODEGROK_OLLAMA_MODEL": "nomic-embed-text"}, clear=False
+        ):
             s1 = get_embedding_service()
             s2 = get_embedding_service()
             assert s1 is s2
@@ -86,6 +96,45 @@ class TestOllamaEmbeddingService:
         ):
             reset_embedding_service()
             service = create_embedding_service()
+            assert isinstance(service, OllamaEmbeddingService)
             assert service.base_url == "http://custom:11434"
             assert service.model == "custom-model"
             assert service.dimensions == 256
+
+    def test_create_embedding_service_falls_back_to_ollama_host(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "OLLAMA_HOST": "http://remote:11434",
+                "CODEGROK_OLLAMA_MODEL": "nomic-embed-text",
+            },
+            clear=True,
+        ):
+            reset_embedding_service()
+            service = create_embedding_service()
+            assert isinstance(service, OllamaEmbeddingService)
+            assert service.base_url == "http://remote:11434"
+
+    def test_singleton_cache_isolated_by_base_url(self):
+        reset_embedding_service()
+        with patch.dict(
+            "os.environ",
+            {
+                "CODEGROK_OLLAMA_MODEL": "nomic-embed-text",
+                "CODEGROK_OLLAMA_URL": "http://host-a:11434",
+            },
+            clear=True,
+        ):
+            s1 = get_embedding_service()
+
+        with patch.dict(
+            "os.environ",
+            {
+                "CODEGROK_OLLAMA_MODEL": "nomic-embed-text",
+                "CODEGROK_OLLAMA_URL": "http://host-b:11434",
+            },
+            clear=True,
+        ):
+            s2 = get_embedding_service()
+
+        assert s1 is not s2
